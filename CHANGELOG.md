@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop adding ?schema=openid to userinfo endpoint URL. #449
 
 ### Fixed
+- Fix missing `iat` verification when verifying JWT #476
 - Check existence of subject when verifying JWT #474
 
 ## [1.0.1] - 2024-09-13
