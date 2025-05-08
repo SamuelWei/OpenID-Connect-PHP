@@ -25,9 +25,32 @@ namespace Jumbojett;
 
 use Error;
 use Exception;
-use phpseclib3\Crypt\RSA;
-use phpseclib3\Math\BigInteger;
-use stdClass;
+use Jose\Component\Checker\AlgorithmChecker;
+use Jose\Component\Checker\AudienceChecker;
+use Jose\Component\Checker\ClaimCheckerManager;
+use Jose\Component\Checker\ExpirationTimeChecker;
+use Jose\Component\Checker\HeaderCheckerManager;
+use Jose\Component\Checker\InvalidClaimException;
+use Jose\Component\Checker\IsEqualChecker;
+use Jose\Component\Checker\IssuedAtChecker;
+use Jose\Component\Core\AlgorithmManagerFactory;
+use Jose\Component\Core\JWK;
+use Jose\Component\Core\JWKSet;
+use Jose\Component\KeyManagement\JWKFactory;
+use Jose\Component\Signature\Algorithm\HS256;
+use Jose\Component\Signature\Algorithm\HS384;
+use Jose\Component\Signature\Algorithm\HS512;
+use Jose\Component\Signature\Algorithm\PS256;
+use Jose\Component\Signature\Algorithm\PS512;
+use Jose\Component\Signature\Algorithm\RS256;
+use Jose\Component\Signature\Algorithm\RS384;
+use Jose\Component\Signature\Algorithm\RS512;
+use Jose\Component\Signature\JWS;
+use Jose\Component\Signature\JWSTokenSupport;
+use Jose\Component\Signature\JWSVerifier;
+use Jose\Component\Signature\Serializer\CompactSerializer;
+use Jose\Component\Signature\Serializer\JWSSerializerManager;
+use Symfony\Component\Clock\Clock;
 use function bin2hex;
 use function is_object;
 use function random_bytes;
@@ -173,7 +196,7 @@ class OpenIDConnectClient
 
     /**
      * @var mixed holds well-known openid configuration parameters, like policy for MS Azure AD B2C User Flow
-     * @see https://docs.microsoft.com/en-us/azure/active-directory-b2c/user-flow-overview 
+     * @see https://docs.microsoft.com/en-us/azure/active-directory-b2c/user-flow-overview
      */
     private $wellKnownConfigParameters = [];
 
@@ -253,6 +276,10 @@ class OpenIDConnectClient
      */
     private $token_endpoint_auth_methods_supported = ['client_secret_basic'];
 
+
+
+    private AlgorithmManagerFactory $algorithmManagerFactory;
+
     /**
      * @param string|null $provider_url optional
      * @param string|null $client_id optional
@@ -269,6 +296,17 @@ class OpenIDConnectClient
 
         $this->clientID = $client_id;
         $this->clientSecret = $client_secret;
+
+        $algorithmManagerFactory = new AlgorithmManagerFactory();
+        $algorithmManagerFactory->add('RS256', new RS256());
+        $algorithmManagerFactory->add('PS256', new PS256());
+        $algorithmManagerFactory->add('PS512', new PS512());
+        $algorithmManagerFactory->add('RS384', new RS384());
+        $algorithmManagerFactory->add('RS512', new RS512());
+        $algorithmManagerFactory->add('HS256', new HS256());
+        $algorithmManagerFactory->add('HS512', new HS512());
+        $algorithmManagerFactory->add('HS384', new HS384());
+        $this->algorithmManagerFactory = $algorithmManagerFactory;
     }
 
     /**
@@ -331,16 +369,36 @@ class OpenIDConnectClient
             }
 
             $id_token = $token_json->id_token;
-            $idTokenHeaders = $this->decodeJWT($id_token);
-            if (isset($idTokenHeaders->enc)) {
-                // Handle JWE
+
+
+            $jwsTokenSupport = new JWSTokenSupport();
+            $headerCheckerManager = new HeaderCheckerManager(
+                [
+                    new AlgorithmChecker($this->algorithmManagerFactory->aliases()),
+                ],
+                [
+                    $jwsTokenSupport
+                    //new JWETokenSupport(), // Currently not supported in this library
+                ]
+            );
+
+            $serializerManager = new JWSSerializerManager([
+                new CompactSerializer(),
+            ]);
+
+            $jws = $serializerManager->unserialize($id_token);
+
+
+            if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
+                // Handle JWE; Throw exception as JWE is not supported in this library
                 $id_token = $this->handleJweResponse($id_token);
             }
 
-            $claims = $this->decodeJWT($id_token, 1);
+            // Verify header
+            $headerCheckerManager->check($jws, 0);
 
             // Verify the signature
-            $this->verifySignatures($id_token);
+            $this->verifySignatures($jws);
 
             // Save the id token
             $this->idToken = $id_token;
@@ -348,28 +406,41 @@ class OpenIDConnectClient
             // Save the access token
             $this->accessToken = $token_json->access_token;
 
-            // If this is a valid claim
-            if ($this->verifyJWTClaims($claims, $token_json->access_token)) {
+            $claims = json_decode($jws->getPayload(), true);
 
-                // Clean up the session a little
-                $this->unsetNonce();
+            $clock = new Clock();
+            $claimCheckerManager = new ClaimCheckerManager(
+                [
+                    new IssuedAtChecker($clock, $this->getLeeway()),
+                    new ExpirationTimeChecker($clock, $this->getLeeway()),
+                    new AudienceChecker($this->clientID),
+                    new IsEqualChecker('nonce', $this->getNonce()),
+                    new AccessTokenHashChecker($this),
+                    new IssuerChecker($this)
+                ]
+            );
 
-                // Save the full response
-                $this->tokenResponse = $token_json;
+            $verifiedClaims = $claimCheckerManager->check($claims, ['sub', 'aud', 'iss', 'iat', 'exp', 'nonce']);
 
-                // Save the verified claims
-                $this->verifiedClaims = $claims;
+            // Clean up the session a little
+            $this->unsetNonce();
 
-                // Save the refresh token, if we got one
-                if (isset($token_json->refresh_token)) {
-                    $this->refreshToken = $token_json->refresh_token;
-                }
+            // Save the full response
+            $this->tokenResponse = $token_json;
 
-                // Success!
-                return true;
+            // Save the verified claims
+            $this->verifiedClaims = $verifiedClaims;
+
+            // Save the refresh token, if we got one
+            if (isset($token_json->refresh_token)) {
+                $this->refreshToken = $token_json->refresh_token;
             }
 
-            throw new OpenIDConnectClientException ('Unable to verify JWT claims');
+            // Success!
+            return true;
+
+
+            //throw new OpenIDConnectClientException ('Unable to verify JWT claims');
         }
 
         if ($this->allowImplicitFlow && isset($_REQUEST['id_token'])) {
@@ -691,7 +762,7 @@ class OpenIDConnectClient
         } else {
             $protocol = 'http';
         }
-	    
+
         if (isset($_SERVER['HTTP_X_FORWARDED_PORT'])) {
             $port = (int)$_SERVER['HTTP_X_FORWARDED_PORT'];
         } elseif (isset($_SERVER['SERVER_PORT'])) {
@@ -714,7 +785,7 @@ class OpenIDConnectClient
         }
 
         $port = (443 === $port) || (80 === $port) ? '' : ':' . $port;
-	    
+
         $explodedRequestUri = isset($_SERVER['REQUEST_URI']) ? explode('?', $_SERVER['REQUEST_URI']) : [];
         return sprintf('%s://%s%s/%s', $protocol, $host, $port, trim(reset($explodedRequestUri), '/'));
     }
@@ -1037,129 +1108,64 @@ class OpenIDConnectClient
         return $json;
     }
 
-    /**
-     * @throws OpenIDConnectClientException
-     */
-    private function getKeyForHeader(array $keys, stdClass $header) {
-        foreach ($keys as $key) {
-            if ($key->kty === 'RSA') {
-                if (!isset($header->kid) || $key->kid === $header->kid) {
-                    return $key;
-                }
-            } else if (isset($key->alg) && $key->alg === $header->alg && $key->kid === $header->kid) {
-                return $key;
-            }
-        }
-        if ($this->additionalJwks) {
-            foreach ($this->additionalJwks as $key) {
-                if ($key->kty === 'RSA') {
-                    if (!isset($header->kid) || $key->kid === $header->kid) {
-                        return $key;
-                    }
-                } else if (isset($key->alg) && $key->alg === $header->alg && $key->kid === $header->kid) {
-                    return $key;
-                }
-            }
-        }
-        if (isset($header->kid)) {
-            throw new OpenIDConnectClientException('Unable to find a key for (algorithm, kid):' . $header->alg . ', ' . $header->kid . ')');
-        }
-
-        throw new OpenIDConnectClientException('Unable to find a key for RSA');
-    }
-
-    /**
-     * @throws OpenIDConnectClientException
-     */
-    private function verifyRSAJWTSignature(string $hashType, stdClass $key, $payload, $signature, $signatureType): bool
+    private function getJWK(string $alg, string $key): JWK
     {
-        if (!(property_exists($key, 'n') && property_exists($key, 'e'))) {
-            throw new OpenIDConnectClientException('Malformed key object');
-        }
-
-        $key = RSA::load([
-            'publicExponent' => new BigInteger(base64_decode(b64url2b64($key->e)), 256),
-            'modulus' => new BigInteger(base64_decode(b64url2b64($key->n)), 256),
-            'isPublicKey' => true,
-        ])
-            ->withHash($hashType);
-        if ($signatureType === 'PSS') {
-            $key = $key->withMGFHash($hashType)
-                ->withPadding(RSA::SIGNATURE_PSS);
-        } else {
-            $key = $key->withPadding(RSA::SIGNATURE_PKCS1);
-        }
-        return $key->verify($payload, $signature);
-    }
-
-    private function verifyHMACJWTSignature(string $hashType, string $key, string $payload, string $signature): bool
-    {
-        $expected = hash_hmac($hashType, $payload, $key, true);
-        return hash_equals($signature, $expected);
+        return JWKFactory::createFromSecret(
+            $key,
+            [
+                'alg' => $alg,
+                'use' => 'sig'
+            ]
+        );
     }
 
     /**
-     * @param string $jwt encoded JWT
+     * @param JWS $jws
      * @return bool
      * @throws OpenIDConnectClientException
      */
-    public function verifyJWTSignature(string $jwt): bool
+    public function verifyJWS(JWS $jws): bool
     {
-        $parts = explode('.', $jwt);
-        if (!isset($parts[0])) {
-            throw new OpenIDConnectClientException('Error missing part 0 in token');
-        }
-        $signature = base64url_decode(array_pop($parts));
-        if (false === $signature || '' === $signature) {
-            throw new OpenIDConnectClientException('Error decoding signature from token');
-        }
-        $header = json_decode(base64url_decode($parts[0]), false);
-        if (!is_object($header)) {
-            throw new OpenIDConnectClientException('Error decoding JSON from token header');
-        }
-        if (!isset($header->alg)) {
-            throw new OpenIDConnectClientException('Error missing signature type in token header');
-        }
+        $signature = $jws->getSignature(0);
+        $alg = $signature->getProtectedHeaderParameter('alg');
 
-        $payload = implode('.', $parts);
-        switch ($header->alg) {
+        $algorithmManager = $this->algorithmManagerFactory->create([$alg]);
+        $jwsVerifier = new JWSVerifier($algorithmManager);
+
+        switch ($alg) {
             case 'RS256':
             case 'PS256':
             case 'PS512':
             case 'RS384':
             case 'RS512':
-                $hashType = 'sha' . substr($header->alg, 2);
-                $signatureType = $header->alg === 'PS256' || $header->alg === 'PS512' ? 'PSS' : '';
-                if (isset($header->jwk)) {
-                    $jwk = $header->jwk;
-                    $this->verifyJWKHeader($jwk);
+                if ($signature->hasProtectedHeaderParameter('jwk')) {
+                    throw new OpenIDConnectClientException('Self signed JWK header is not valid');
                 } else {
                     $jwksUri = $this->getProviderConfigValue('jwks_uri');
                     if (!$jwksUri) {
                         throw new OpenIDConnectClientException ('Unable to verify signature due to no jwks_uri being defined');
                     }
 
-                    $jwks = json_decode($this->fetchURL($jwksUri), false);
-                    if ($jwks === NULL) {
-                        throw new OpenIDConnectClientException('Error decoding JSON from jwks_uri');
-                    }
-                    $jwk = $this->getKeyForHeader($jwks->keys, $header);
-                }
+                    $jwkSet = JWKSet::createFromJson($this->fetchURL($jwksUri));
 
-                $verified = $this->verifyRSAJWTSignature($hashType,
-                    $jwk,
-                    $payload, $signature, $signatureType);
+                    $restrictions = [];
+                    if($signature->hasProtectedHeaderParameter('kid')){
+                        $restrictions['kid'] = $signature->getProtectedHeaderParameter('kid');
+                    }
+
+                    $jwk = $jwkSet->selectKey('sig', $algorithmManager->get($algorithmManager->list()[0]), $restrictions);
+                }
                 break;
             case 'HS256':
             case 'HS512':
             case 'HS384':
-                $hashType = 'SHA' . substr($header->alg, 2);
-                $verified = $this->verifyHMACJWTSignature($hashType, $this->getClientSecret(), $payload, $signature);
+                $jwk = $this->getJWK($alg, $this->getClientSecret());
                 break;
             default:
-                throw new OpenIDConnectClientException('No support for signature type: ' . $header->alg);
+                throw new OpenIDConnectClientException('No support for signature type: ' . $alg);
         }
-        return $verified;
+
+        return $jwsVerifier->verifyWithKey($jws, $jwk, 0);
     }
 
     /**
@@ -1167,9 +1173,9 @@ class OpenIDConnectClient
      * @return void
      * @throws OpenIDConnectClientException
      */
-    public function verifySignatures(string $jwt)
+    public function verifySignatures(JWS $jws)
     {
-        if (!$this->verifyJWTSignature($jwt)) {
+        if (!$this->verifyJWS($jws)) {
             throw new OpenIDConnectClientException ('Unable to verify signature');
         }
     }
@@ -1200,7 +1206,7 @@ class OpenIDConnectClient
         if (!isset($claims->sub)) {
             return false;
         }
-	    
+
         if(isset($claims->at_hash, $accessToken)) {
             if(isset($this->getIdTokenHeader()->alg) && $this->getIdTokenHeader()->alg !== 'none') {
                 $bit = substr($this->getIdTokenHeader()->alg, 2, 3);
@@ -1223,7 +1229,7 @@ class OpenIDConnectClient
         );
     }
 
-    protected function urlEncode(string $str): string
+    public function urlEncode(string $str): string
     {
         $enc = base64_encode($str);
         $enc = rtrim($enc, '=');

@@ -386,4 +386,92 @@ class OpenIDConnectClientTest extends TestCase
         $client->setLeeway(100);
         $this->assertEquals(100, $client->getLeeway());
     }
+    public function testRetrievesUnsignedAndUnencryptedUserInfoSuccessfully()
+    {
+        $fakeUserInfo = (object)[
+            'sub' => 'user123',
+            'name' => 'John Doe',
+            'email' => 'john.doe@example.com'
+        ];
+
+        /** @var OpenIDConnectClient | MockObject $client */
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->onlyMethods(['getProviderConfigValue', 'fetchURL', 'getResponseCode', 'getResponseContentType', 'getIdTokenPayload'])
+            ->getMock();
+
+        $client->method('getProviderConfigValue')->with('userinfo_endpoint')->willReturn('https://example.com/userinfo');
+        $client->method('fetchURL')->willReturn(json_encode($fakeUserInfo));
+        $client->method('getResponseCode')->willReturn(200);
+        $client->method('getResponseContentType')->willReturn('application/json');
+        $client->method('getIdTokenPayload')->willReturn((object)['sub' => 'user123']);
+
+        $userInfo = $client->requestUserInfo();
+
+        $this->assertEquals($fakeUserInfo, $userInfo);
+    }
+
+    public function testThrowsExceptionWhenUserInfoEndpointFails()
+    {
+        /** @var OpenIDConnectClient | MockObject $client */
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->onlyMethods(['getProviderConfigValue', 'fetchURL', 'getResponseCode'])
+            ->getMock();
+
+        $client->method('getProviderConfigValue')->with('userinfo_endpoint')->willReturn('https://example.com/userinfo');
+        $client->method('fetchURL')->willReturn(null);
+        $client->method('getResponseCode')->willReturn(500);
+
+        $this->expectException(OpenIDConnectClientException::class);
+        $this->expectExceptionMessage('The communication to retrieve user data has failed with status code 500');
+
+        $client->requestUserInfo();
+    }
+
+    public function testRetrievesSpecificAttributeSuccessfully()
+    {
+        $fakeUserInfo = (object)[
+            'sub' => 'user123',
+            'name' => 'John Doe',
+            'email' => 'john.doe@example.com'
+        ];
+
+        /** @var OpenIDConnectClient | MockObject $client */
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->onlyMethods(['getProviderConfigValue', 'fetchURL', 'getResponseCode', 'getResponseContentType', 'getIdTokenPayload'])
+            ->getMock();
+
+        $client->method('getProviderConfigValue')->with('userinfo_endpoint')->willReturn('https://example.com/userinfo');
+        $client->method('fetchURL')->willReturn(json_encode($fakeUserInfo));
+        $client->method('getResponseCode')->willReturn(200);
+        $client->method('getResponseContentType')->willReturn('application/json');
+        $client->method('getIdTokenPayload')->willReturn((object)['sub' => 'user123']);
+
+        $email = $client->requestUserInfo('email');
+
+        $this->assertEquals('john.doe@example.com', $email);
+    }
+
+    public function testReturnsNullForNonExistentAttribute()
+    {
+        $fakeUserInfo = (object)[
+            'sub' => 'user123',
+            'name' => 'John Doe'
+        ];
+
+        /** @var OpenIDConnectClient | MockObject $client */
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->onlyMethods(['getProviderConfigValue', 'fetchURL', 'getResponseCode', 'getResponseContentType', 'getIdTokenPayload'])
+            ->getMock();
+
+        $client->method('getProviderConfigValue')->with('userinfo_endpoint')->willReturn('https://example.com/userinfo');
+        $client->method('fetchURL')->willReturn(json_encode($fakeUserInfo));
+        $client->method('getResponseCode')->willReturn(200);
+        $client->method('getResponseContentType')->willReturn('application/json');
+        $client->method('getIdTokenPayload')->willReturn((object)['sub' => 'user123']);
+
+        $phoneNumber = $client->requestUserInfo('phone_number');
+
+        $this->assertNull($phoneNumber);
+    }
+
 }
