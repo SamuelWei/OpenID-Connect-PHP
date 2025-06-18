@@ -212,9 +212,9 @@ class OpenIDConnectClient
     private $leeway = 300;
 
     /**
-     * @var array holds response types
+     * @var JWK[] additional JWKs
      */
-    private $additionalJwks = [];
+    private array $additionalJwks = [];
 
     /**
      * @var object holds verified jwt claims
@@ -683,10 +683,12 @@ class OpenIDConnectClient
     }
 
     /**
-     * @param $jwk object - example: (object) ['kid' => ..., 'nbf' => ..., 'use' => 'sig', 'kty' => "RSA", 'e' => "", 'n' => ""]
+     * @param $values object - example: (object) ['kid' => ..., 'nbf' => ..., 'use' => 'sig', 'kty' => "RSA", 'e' => "", 'n' => ""]
      */
-    protected function addAdditionalJwk($jwk) {
-        $this->additionalJwks[] = $jwk;
+    protected function addAdditionalJwk(object $values): void
+    {
+        $key = JWKFactory::createFromValues((array) $values);
+        $this->additionalJwks[] = $key;
     }
 
     /**
@@ -1185,6 +1187,11 @@ class OpenIDConnectClient
                     }
 
                     $jwkSet = JWKSet::createFromJson($this->fetchURL($jwksUri));
+
+                    // Add additional JWKs
+                    foreach ($this->additionalJwks as $additionalJwk){
+                        $jwkSet = $jwkSet->with($additionalJwk);
+                    }
 
                     $restrictions = [];
                     if($signature->hasProtectedHeaderParameter('kid')){
