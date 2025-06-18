@@ -419,7 +419,8 @@ class OpenIDConnectClient
             // Save the access token
             $this->accessToken = $token_json->access_token;
 
-            $claims = json_decode($jws->getPayload(), true);
+            // Get claims from JWT
+            $claims = json_decode($jws->getPayload());
 
             $clock = new Clock();
             $claimCheckerManager = new ClaimCheckerManager(
@@ -433,7 +434,7 @@ class OpenIDConnectClient
                 ]
             );
 
-            $verifiedClaims = $claimCheckerManager->check($claims, ['sub', 'aud', 'iss', 'iat', 'exp', 'nonce']);
+            $verifiedClaims = $claimCheckerManager->check((array) $claims, ['sub', 'aud', 'iss', 'iat', 'exp', 'nonce']);
 
             // Clean up the session a little
             $this->unsetNonce();
@@ -506,7 +507,8 @@ class OpenIDConnectClient
                 $this->accessToken = $accessToken;
             }
 
-            $claims = json_decode($jws->getPayload(), true);
+            // Get claims from JWT
+            $claims = json_decode($jws->getPayload());
 
             $clock = new Clock();
             $claimCheckerManager = new ClaimCheckerManager(
@@ -520,7 +522,7 @@ class OpenIDConnectClient
                 ]
             );
 
-            $verifiedClaims = $claimCheckerManager->check($claims, ['sub', 'aud', 'iss', 'iat', 'exp', 'nonce']);
+            $verifiedClaims = $claimCheckerManager->check((array) $claims, ['sub', 'aud', 'iss', 'iat', 'exp', 'nonce']);
 
             $this->unsetNonce();
 
@@ -583,10 +585,38 @@ class OpenIDConnectClient
         if (isset($_REQUEST['logout_token'])) {
             $logout_token = $_REQUEST['logout_token'];
 
-            $claims = $this->decodeJWT($logout_token, 1);
+            $jwsTokenSupport = new JWSTokenSupport();
+            $headerCheckerManager = new HeaderCheckerManager(
+                [
+                    new AlgorithmChecker($this->algorithmManagerFactory->aliases()),
+                ],
+                [
+                    $jwsTokenSupport
+                    //new JWETokenSupport(), // Currently not supported in this library
+                ]
+            );
+
+            $serializerManager = new JWSSerializerManager([
+                new CompactSerializer(),
+            ]);
+
+            $jws = $serializerManager->unserialize($logout_token);
+
+            if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
+                // Handle JWE; Throw exception as JWE is not supported in this library
+                // @TODO: What should we do with the result?
+                $this->handleJweResponse($logout_token);
+            }
+
+            // Verify header
+            $headerCheckerManager->check($jws, 0);
 
             // Verify the signature
-            $this->verifySignatures($logout_token);
+            $this->verifySignatures($jws);
+
+            // Get claims from JWT
+            $claims = json_decode($jws->getPayload());
+
 
             // Verify Logout Token Claims
             if ($this->verifyLogoutTokenClaims($claims)) {
@@ -608,8 +638,22 @@ class OpenIDConnectClient
      * @return bool
      * @throws OpenIDConnectClientException
      */
-    public function verifyLogoutTokenClaims($claims): bool
+    public function verifyLogoutTokenClaims(object $claims): bool
     {
+        $clock = new Clock();
+        $claimCheckerManager = new ClaimCheckerManager(
+            [
+                new IssuedAtChecker($clock, $this->getLeeway()),
+                new ExpirationTimeChecker($clock, $this->getLeeway()),
+                new AudienceChecker($this->clientID),
+                new AccessTokenHashChecker($this),
+                new IssuerChecker($this),
+                new EventsChecker('http://schemas.openid.net/event/backchannel-logout'),
+            ]
+        );
+
+        $claimCheckerManager->check((array)$claims, ['aud', 'iss', 'iat', 'exp', 'events']);
+
         // Verify that the Logout Token doesn't contain a nonce Claim.
         if (isset($claims->nonce)) {
             return false;
@@ -631,37 +675,6 @@ class OpenIDConnectClient
         // session.
         if (isset($claims->sub)) {
             $this->backChannelSubject = $claims->sub;
-        }
-
-        // Verify that the Logout Token contains an events Claim whose
-        // value is a JSON object containing the member name
-        // http://schemas.openid.net/event/backchannel-logout
-        if (isset($claims->events)) {
-            $events = (array) $claims->events;
-            if (!isset($events['http://schemas.openid.net/event/backchannel-logout']) ||
-                !is_object($events['http://schemas.openid.net/event/backchannel-logout'])) {
-                return false;
-            }
-        }
-
-        // Validate the iss
-        if (!$this->validateIssuer($claims->iss)) {
-            return false;
-        }
-        // Validate the aud
-        $auds = $claims->aud;
-        $auds = is_array($auds) ? $auds : [ $auds ];
-        if (!in_array($this->clientID, $auds, true)) {
-            return false;
-        }
-        // Validate iat exists, is an int, and is not in the future
-        if (!isset($claims->iat) || !is_int($claims->iat) || ($claims->iat >= time() + $this->leeway)) {
-            return false;
-        }
-
-        // Validate exp exists, is an int, and is not too old
-        if (!isset($claims->exp) || !is_int($claims->exp) || ($claims->exp <= time() - $this->leeway)) {
-            return false;
         }
 
         return true;
@@ -1370,7 +1383,7 @@ class OpenIDConnectClient
             $this->verifySignatures($jws);
 
             // Get claims from JWT
-            $claims = json_decode($jws->getPayload(), true);
+            $claims = json_decode($jws->getPayload());
 
             /*
              * The sub (subject) Claim MUST always be returned in the UserInfo Response.
@@ -1387,9 +1400,9 @@ class OpenIDConnectClient
                     new IssuerChecker($this),
                     new IsEqualChecker('sub', $this->getIdTokenPayload()->sub),
                 ]
-            ))->check($claims, ['sub', 'aud', 'iss']);
+            ))->check((array) $claims, ['sub', 'aud', 'iss']);
         } else {
-            $claims = json_decode($response, true);
+            $claims = json_decode($response);
 
             /*
              * The sub (subject) Claim MUST always be returned in the UserInfo Response.
@@ -1401,11 +1414,11 @@ class OpenIDConnectClient
                 [
                     new IsEqualChecker('sub', $this->getIdTokenPayload()->sub),
                 ]
-            ))->check($claims, ['sub']);
+            ))->check((array) $claims, ['sub']);
         }
 
 
-        $userInfo = (object) $claims;
+        $userInfo = $claims;
 
         if ($attribute === null) {
             return $userInfo;
