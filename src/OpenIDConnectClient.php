@@ -37,6 +37,9 @@ use Jose\Component\Core\AlgorithmManagerFactory;
 use Jose\Component\Core\JWK;
 use Jose\Component\Core\JWKSet;
 use Jose\Component\KeyManagement\JWKFactory;
+use Jose\Component\Signature\Algorithm\ES256;
+use Jose\Component\Signature\Algorithm\ES384;
+use Jose\Component\Signature\Algorithm\ES512;
 use Jose\Component\Signature\Algorithm\HS256;
 use Jose\Component\Signature\Algorithm\HS384;
 use Jose\Component\Signature\Algorithm\HS512;
@@ -310,6 +313,9 @@ class OpenIDConnectClient
         $algorithmManagerFactory->add('HS256', new HS256());
         $algorithmManagerFactory->add('HS512', new HS512());
         $algorithmManagerFactory->add('HS384', new HS384());
+        $algorithmManagerFactory->add('ES256', new ES256());
+        $algorithmManagerFactory->add('ES384', new ES384());
+        $algorithmManagerFactory->add('ES512', new ES512());
         $this->algorithmManagerFactory = $algorithmManagerFactory;
     }
 
@@ -1192,6 +1198,9 @@ class OpenIDConnectClient
             case 'RS384':
             case 'PS512':
             case 'RS512':
+            case 'ES256':
+            case 'ES384':
+            case 'ES512':
 
                 if ($signature->hasProtectedHeaderParameter('jwk')) {
                     throw new OpenIDConnectClientException('Self signed JWK header is not valid');
