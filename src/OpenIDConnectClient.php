@@ -41,6 +41,7 @@ use Jose\Component\Signature\Algorithm\HS256;
 use Jose\Component\Signature\Algorithm\HS384;
 use Jose\Component\Signature\Algorithm\HS512;
 use Jose\Component\Signature\Algorithm\PS256;
+use Jose\Component\Signature\Algorithm\PS384;
 use Jose\Component\Signature\Algorithm\PS512;
 use Jose\Component\Signature\Algorithm\RS256;
 use Jose\Component\Signature\Algorithm\RS384;
@@ -298,10 +299,11 @@ class OpenIDConnectClient
         $this->clientSecret = $client_secret;
 
         $algorithmManagerFactory = new AlgorithmManagerFactory();
-        $algorithmManagerFactory->add('RS256', new RS256());
         $algorithmManagerFactory->add('PS256', new PS256());
-        $algorithmManagerFactory->add('PS512', new PS512());
+        $algorithmManagerFactory->add('RS256', new RS256());
+        $algorithmManagerFactory->add('PS384', new PS384());
         $algorithmManagerFactory->add('RS384', new RS384());
+        $algorithmManagerFactory->add('PS512', new PS512());
         $algorithmManagerFactory->add('RS512', new RS512());
         $algorithmManagerFactory->add('HS256', new HS256());
         $algorithmManagerFactory->add('HS512', new HS512());
@@ -357,7 +359,7 @@ class OpenIDConnectClient
             }
 
             // Do an OpenID Connect session check
-	    if (!isset($_REQUEST['state']) || ($_REQUEST['state'] !== $this->getState())) {
+	        if (!isset($_REQUEST['state']) || ($_REQUEST['state'] !== $this->getState())) {
                 throw new OpenIDConnectClientException('Unable to determine state');
             }
 
@@ -457,34 +459,68 @@ class OpenIDConnectClient
             // Cleanup state
             $this->unsetState();
 
-            $claims = $this->decodeJWT($id_token, 1);
+            $jwsTokenSupport = new JWSTokenSupport();
+            $headerCheckerManager = new HeaderCheckerManager(
+                [
+                    new AlgorithmChecker($this->algorithmManagerFactory->aliases()),
+                ],
+                [
+                    $jwsTokenSupport
+                    //new JWETokenSupport(), // Currently not supported in this library
+                ]
+            );
+
+            $serializerManager = new JWSSerializerManager([
+                new CompactSerializer(),
+            ]);
+
+            $jws = $serializerManager->unserialize($id_token);
+
+            if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
+                // Handle JWE; Throw exception as JWE is not supported in this library
+                $id_token = $this->handleJweResponse($id_token);
+            }
+
+            // Verify header
+            $headerCheckerManager->check($jws, 0);
 
             // Verify the signature
-            $this->verifySignatures($id_token);
+            $this->verifySignatures($jws);
 
             // Save the id token
             $this->idToken = $id_token;
 
-            // If this is a valid claim
-            if ($this->verifyJWTClaims($claims, $accessToken)) {
-
-                // Clean up the session a little
-                $this->unsetNonce();
-
-                // Save the verified claims
-                $this->verifiedClaims = $claims;
-
-                // Save the access token
-                if ($accessToken) {
-                    $this->accessToken = $accessToken;
-                }
-
-                // Success!
-                return true;
-
+            // Save the access token
+            if ($accessToken) {
+                $this->accessToken = $accessToken;
             }
 
-            throw new OpenIDConnectClientException ('Unable to verify JWT claims');
+            $claims = json_decode($jws->getPayload(), true);
+
+            $clock = new Clock();
+            $claimCheckerManager = new ClaimCheckerManager(
+                [
+                    new IssuedAtChecker($clock, $this->getLeeway()),
+                    new ExpirationTimeChecker($clock, $this->getLeeway()),
+                    new AudienceChecker($this->clientID),
+                    new IsEqualChecker('nonce', $this->getNonce()),
+                    new AccessTokenHashChecker($this),
+                    new IssuerChecker($this)
+                ]
+            );
+
+            $verifiedClaims = $claimCheckerManager->check($claims, ['sub', 'aud', 'iss', 'iat', 'exp', 'nonce']);
+
+            $this->unsetNonce();
+
+            // Save the verified claims
+            $this->verifiedClaims = $verifiedClaims;
+
+            // Success!
+            return true;
+
+
+            //throw new OpenIDConnectClientException ('Unable to verify JWT claims');
         }
 
         $this->requestAuthorization();
@@ -1133,11 +1169,13 @@ class OpenIDConnectClient
         $jwsVerifier = new JWSVerifier($algorithmManager);
 
         switch ($alg) {
-            case 'RS256':
             case 'PS256':
-            case 'PS512':
+            case 'RS256':
+            case 'PS384':
             case 'RS384':
+            case 'PS512':
             case 'RS512':
+
                 if ($signature->hasProtectedHeaderParameter('jwk')) {
                     throw new OpenIDConnectClientException('Self signed JWK header is not valid');
                 } else {
@@ -1194,41 +1232,6 @@ class OpenIDConnectClient
         return ($iss === $this->getIssuer() || $iss === $this->getWellKnownIssuer() || $iss === $this->getWellKnownIssuer(true));
     }
 
-    /**
-     * @param object $claims
-     * @param string|null $accessToken
-     * @return bool
-     * @throws OpenIDConnectClientException
-     */
-    protected function verifyJWTClaims($claims, ?string $accessToken = null): bool
-    {
-        // Verify that sub is set
-        if (!isset($claims->sub)) {
-            return false;
-        }
-
-        if(isset($claims->at_hash, $accessToken)) {
-            if(isset($this->getIdTokenHeader()->alg) && $this->getIdTokenHeader()->alg !== 'none') {
-                $bit = substr($this->getIdTokenHeader()->alg, 2, 3);
-            } else {
-                // TODO: Error case. throw exception???
-                $bit = '256';
-            }
-            $len = ((int)$bit)/16;
-            $expected_at_hash = $this->urlEncode(substr(hash('sha'.$bit, $accessToken, true), 0, $len));
-        }
-        $auds = $claims->aud;
-        $auds = is_array( $auds ) ? $auds : [ $auds ];
-        return (($this->validateIssuer($claims->iss))
-            && (in_array($this->clientID, $auds, true))
-            && ($claims->sub === $this->getIdTokenPayload()->sub)
-            && (!isset($claims->nonce) || $claims->nonce === $this->getNonce())
-            && ( !isset($claims->exp) || ((is_int($claims->exp)) && ($claims->exp >= time() - $this->leeway)))
-            && ( !isset($claims->nbf) || ((is_int($claims->nbf)) && ($claims->nbf <= time() + $this->leeway)))
-            && ( !isset($claims->at_hash) || !isset($accessToken) || $claims->at_hash === $expected_at_hash )
-        );
-    }
-
     public function urlEncode(string $str): string
     {
         $enc = base64_encode($str);
@@ -1278,7 +1281,7 @@ class OpenIDConnectClient
 
         $user_info_endpoint = $this->getProviderConfigValue('userinfo_endpoint');
 
-        //The accessToken has to be sent in the Authorization header.
+        // The accessToken has to be sent in the Authorization header.
         // Accept json to indicate response type
         $headers = ["Authorization: Bearer $this->accessToken",
             'Accept: application/json'];
@@ -1289,34 +1292,87 @@ class OpenIDConnectClient
         }
 
         // When we receive application/jwt, the UserInfo Response is signed and/or encrypted.
-        if ($this->getResponseContentType() === 'application/jwt' ) {
-            // Check if the response is encrypted
-            $jwtHeaders = $this->decodeJWT($response);
-            if (isset($jwtHeaders->enc)) {
-                // Handle JWE
-                $jwt = $this->handleJweResponse($response);
-            } else {
-                // If the response is not encrypted then it must be signed
-                $jwt = $response;
+
+        /*
+         * The UserInfo Endpoint MUST return a content-type header to indicate which format is being returned.
+         * The content-type of the HTTP response MUST be application/json if the response body is a text JSON object; the response body SHOULD be encoded using UTF-8.
+         *
+         * If the UserInfo Response is signed and/or encrypted, then the Claims are returned in a JWT and the content-type MUST be application/jwt.
+         * The response MAY be encrypted without also being signed.
+         * If both signing and encryption are requested, the response MUST be signed then encrypted, with the result being a Nested JWT, as defined in [JWT].
+         */
+
+        // Extract the content type from the response (remove optional charset)
+        $contentType = explode(";",$this->getResponseContentType())[0];
+
+        if ($contentType === 'application/jwt' ) {
+
+            $jwsTokenSupport = new JWSTokenSupport();
+            $headerCheckerManager = new HeaderCheckerManager(
+                [
+                    new AlgorithmChecker($this->algorithmManagerFactory->aliases()),
+                ],
+                [
+                    $jwsTokenSupport
+                    //new JWETokenSupport(), // Currently not supported in this library
+                ]
+            );
+
+            $serializerManager = new JWSSerializerManager([
+                new CompactSerializer(),
+            ]);
+
+            $jws = $serializerManager->unserialize($response);
+
+            if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
+                // Handle JWE; Throw exception as JWE is not supported in this library
+                // @TODO: What should be done with the return value?
+                $this->handleJweResponse($response);
             }
+
+            // Verify header
+            $headerCheckerManager->check($jws, 0);
 
             // Verify the signature
-            $this->verifySignatures($jwt);
+            $this->verifySignatures($jws);
 
             // Get claims from JWT
-            $claims = $this->decodeJWT($jwt, 1);
+            $claims = json_decode($jws->getPayload(), true);
 
-            // Verify the JWT claims
-            if (!$this->verifyJWTClaims($claims)) {
-                throw new OpenIDConnectClientException('Invalid JWT signature');
-            }
+            /*
+             * The sub (subject) Claim MUST always be returned in the UserInfo Response.
+             * NOTE: Due to the possibility of token substitution attacks (see Section 16.11), the UserInfo Response is not guaranteed to be about the End-User identified by the sub (subject) element of the ID Token.
+             * The sub Claim in the UserInfo Response MUST be verified to exactly match the sub Claim in the ID Token; if they do not match, the UserInfo Response values MUST NOT be used.
+             *
+             * If signed, the UserInfo Response MUST contain the Claims iss (issuer) and aud (audience) as members.
+             * The iss value MUST be the OP's Issuer Identifier URL. The aud value MUST be or include the RP's Client ID value.
+            */
 
-            $user_json = $claims;
+            (new ClaimCheckerManager(
+                [
+                    new AudienceChecker($this->clientID),
+                    new IssuerChecker($this),
+                    new IsEqualChecker('sub', $this->getIdTokenPayload()->sub),
+                ]
+            ))->check($claims, ['sub', 'aud', 'iss']);
         } else {
-            $user_json = json_decode($response, false);
+            $claims = json_decode($response, true);
+
+            /*
+             * The sub (subject) Claim MUST always be returned in the UserInfo Response.
+             * NOTE: Due to the possibility of token substitution attacks (see Section 16.11), the UserInfo Response is not guaranteed to be about the End-User identified by the sub (subject) element of the ID Token.
+             * The sub Claim in the UserInfo Response MUST be verified to exactly match the sub Claim in the ID Token; if they do not match, the UserInfo Response values MUST NOT be used.
+             */
+
+            (new ClaimCheckerManager(
+                [
+                    new IsEqualChecker('sub', $this->getIdTokenPayload()->sub),
+                ]
+            ))->check($claims, ['sub']);
         }
 
-        $userInfo = $user_json;
+
+        $userInfo = (object) $claims;
 
         if($attribute === null) {
             return $userInfo;
