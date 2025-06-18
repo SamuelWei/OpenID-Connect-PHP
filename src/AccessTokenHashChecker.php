@@ -20,7 +20,7 @@ final class AccessTokenHashChecker implements ClaimChecker
         }
 
         $bit = substr($this->openIDConnectClient->getIdTokenHeader()->alg, 2, 3);
-        $len = ((int)$bit)/16;
+        $len = ((int)$bit) / 16;
         $expected_at_hash = $this->openIDConnectClient->urlEncode(substr(hash('sha'.$bit, $this->openIDConnectClient->getAccessToken(), true), 0, $len));
 
         if ($value !== $expected_at_hash) {

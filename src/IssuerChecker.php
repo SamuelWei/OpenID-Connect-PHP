@@ -18,7 +18,7 @@ final class IssuerChecker implements ClaimChecker
 
         if ($issuerValidator !== null) {
             $isValid = $issuerValidator->__invoke($value);
-        }else{
+        } else {
             $isValid = ($value === $this->openIDConnectClient->getIssuer() || $value === $this->openIDConnectClient->getWellKnownIssuer() || $value === $this->openIDConnectClient->getWellKnownIssuer(true));
         }
 
