@@ -634,7 +634,7 @@ class OpenIDConnectClient
                 ]
             );
 
-            $claimCheckerManager->check((array)$claims, ['aud', 'iss', 'iat', 'exp', 'events']);
+            $claimCheckerManager->check((array)$claims, ['aud', 'iss', 'iat', 'exp', 'events', 'jti']);
 
         } catch (MissingMandatoryClaimException | InvalidClaimException) {
             return false;
