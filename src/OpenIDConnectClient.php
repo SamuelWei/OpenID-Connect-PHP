@@ -33,6 +33,7 @@ use Jose\Component\Checker\HeaderCheckerManager;
 use Jose\Component\Checker\InvalidClaimException;
 use Jose\Component\Checker\IsEqualChecker;
 use Jose\Component\Checker\IssuedAtChecker;
+use Jose\Component\Checker\MissingMandatoryClaimException;
 use Jose\Component\Core\AlgorithmManagerFactory;
 use Jose\Component\Core\JWK;
 use Jose\Component\Core\JWKSet;
@@ -285,6 +286,10 @@ class OpenIDConnectClient
 
     private AlgorithmManagerFactory $algorithmManagerFactory;
 
+    private JWSSerializerManager $jwsSerializerManager;
+
+    private HeaderCheckerManager $headerCheckerManager;
+
     /**
      * @param string|null $provider_url optional
      * @param string|null $client_id optional
@@ -317,6 +322,21 @@ class OpenIDConnectClient
         $algorithmManagerFactory->add('ES384', new ES384());
         $algorithmManagerFactory->add('ES512', new ES512());
         $this->algorithmManagerFactory = $algorithmManagerFactory;
+
+        $this->jwsSerializerManager = new JWSSerializerManager([
+            new CompactSerializer(),
+        ]);
+
+        $jwsTokenSupport = new JWSTokenSupport();
+        $this->headerCheckerManager = new HeaderCheckerManager(
+            [
+                new AlgorithmChecker($this->algorithmManagerFactory->aliases()),
+            ],
+            [
+                $jwsTokenSupport
+                //new JWETokenSupport(), // Currently not supported in this library
+            ]
+        );
     }
 
     /**
@@ -383,32 +403,17 @@ class OpenIDConnectClient
 
             $id_token = $token_json->id_token;
 
-
-            $jwsTokenSupport = new JWSTokenSupport();
-            $headerCheckerManager = new HeaderCheckerManager(
-                [
-                    new AlgorithmChecker($this->algorithmManagerFactory->aliases()),
-                ],
-                [
-                    $jwsTokenSupport
-                    //new JWETokenSupport(), // Currently not supported in this library
-                ]
-            );
-
-            $serializerManager = new JWSSerializerManager([
-                new CompactSerializer(),
-            ]);
-
-            $jws = $serializerManager->unserialize($id_token);
+            $jws = $this->jwsSerializerManager->unserialize($id_token);
 
 
             if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
                 // Handle JWE; Throw exception as JWE is not supported in this library
-                $id_token = $this->handleJweResponse($id_token);
+                // @TODO: What should we do with the result?
+                $this->handleJweResponse($id_token);
             }
 
             // Verify header
-            $headerCheckerManager->check($jws, 0);
+            $this->headerCheckerManager->check($jws, 0);
 
             // Verify the signature
             $this->verifySignatures($jws);
@@ -419,42 +424,30 @@ class OpenIDConnectClient
             // Save the access token
             $this->accessToken = $token_json->access_token;
 
-            // Get claims from JWT
-            $claims = json_decode($jws->getPayload());
-
-            $clock = new Clock();
-            $claimCheckerManager = new ClaimCheckerManager(
-                [
-                    new IssuedAtChecker($clock, $this->getLeeway()),
-                    new ExpirationTimeChecker($clock, $this->getLeeway()),
-                    new AudienceChecker($this->clientID),
-                    new IsEqualChecker('nonce', $this->getNonce()),
-                    new AccessTokenHashChecker($this),
-                    new IssuerChecker($this)
-                ]
-            );
-
-            $verifiedClaims = $claimCheckerManager->check((array) $claims, ['sub', 'aud', 'iss', 'iat', 'exp', 'nonce']);
-
-            // Clean up the session a little
-            $this->unsetNonce();
-
-            // Save the full response
-            $this->tokenResponse = $token_json;
-
-            // Save the verified claims
-            $this->verifiedClaims = $verifiedClaims;
-
             // Save the refresh token, if we got one
             if (isset($token_json->refresh_token)) {
                 $this->refreshToken = $token_json->refresh_token;
             }
 
-            // Success!
-            return true;
+            // Save the full response
+            $this->tokenResponse = $token_json;
 
+            // Get claims from JWT
+            $claims = json_decode($jws->getPayload());
 
-            //throw new OpenIDConnectClientException ('Unable to verify JWT claims');
+            if ($this->verifyIdTokenClaims($claims)) {
+
+                // Clean up the session a little
+                $this->unsetNonce();
+
+                // Save the verified claims
+                $this->verifiedClaims = $claims;
+
+                // Success!
+                return true;
+            }
+
+            throw new OpenIDConnectClientException('Unable to verify JWT claims');
         }
 
         if ($this->allowImplicitFlow && isset($_REQUEST['id_token'])) {
@@ -471,30 +464,16 @@ class OpenIDConnectClient
             // Cleanup state
             $this->unsetState();
 
-            $jwsTokenSupport = new JWSTokenSupport();
-            $headerCheckerManager = new HeaderCheckerManager(
-                [
-                    new AlgorithmChecker($this->algorithmManagerFactory->aliases()),
-                ],
-                [
-                    $jwsTokenSupport
-                    //new JWETokenSupport(), // Currently not supported in this library
-                ]
-            );
-
-            $serializerManager = new JWSSerializerManager([
-                new CompactSerializer(),
-            ]);
-
-            $jws = $serializerManager->unserialize($id_token);
+            $jws = $this->jwsSerializerManager->unserialize($id_token);
 
             if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
                 // Handle JWE; Throw exception as JWE is not supported in this library
-                $id_token = $this->handleJweResponse($id_token);
+                // @TODO: What should we do with the result?
+                $this->handleJweResponse($id_token);
             }
 
             // Verify header
-            $headerCheckerManager->check($jws, 0);
+            $this->headerCheckerManager->check($jws, 0);
 
             // Verify the signature
             $this->verifySignatures($jws);
@@ -510,34 +489,52 @@ class OpenIDConnectClient
             // Get claims from JWT
             $claims = json_decode($jws->getPayload());
 
+            if ($this->verifyIdTokenClaims($claims)) {
+
+                $this->unsetNonce();
+
+                // Save the verified claims
+                $this->verifiedClaims = $claims;
+
+                // Success!
+                return true;
+            }
+
+
+            throw new OpenIDConnectClientException('Unable to verify JWT claims');
+        }
+
+        $this->requestAuthorization();
+        return false;
+    }
+
+    /**
+     * Verify each claim in the id token according to the spec
+     * @param object $claims
+     * @return bool
+     */
+    public function verifyIdTokenClaims(object $claims): bool
+    {
+        try {
             $clock = new Clock();
             $claimCheckerManager = new ClaimCheckerManager(
                 [
-                    new IssuedAtChecker($clock, $this->getLeeway()),
-                    new ExpirationTimeChecker($clock, $this->getLeeway()),
-                    new AudienceChecker($this->clientID),
-                    new IsEqualChecker('nonce', $this->getNonce()),
+                    new IssuedAtChecker(allowedTimeDrift: $this->getLeeway(), clock: $clock),
+                    new ExpirationTimeChecker(allowedTimeDrift: $this->getLeeway(), clock: $clock),
+                    new AudienceChecker(audience: $this->clientID),
+                    new IsEqualChecker(key: 'nonce', value: $this->getNonce()),
                     new AccessTokenHashChecker($this),
                     new IssuerChecker($this)
                 ]
             );
 
-            $verifiedClaims = $claimCheckerManager->check((array) $claims, ['sub', 'aud', 'iss', 'iat', 'exp', 'nonce']);
+            $claimCheckerManager->check((array)$claims, ['sub', 'aud', 'iss', 'iat', 'exp', 'nonce']);
 
-            $this->unsetNonce();
-
-            // Save the verified claims
-            $this->verifiedClaims = $verifiedClaims;
-
-            // Success!
-            return true;
-
-
-            //throw new OpenIDConnectClientException ('Unable to verify JWT claims');
+        } catch (MissingMandatoryClaimException | InvalidClaimException) {
+            return false;
         }
 
-        $this->requestAuthorization();
-        return false;
+        return true;
     }
 
     /**
@@ -585,22 +582,7 @@ class OpenIDConnectClient
         if (isset($_REQUEST['logout_token'])) {
             $logout_token = $_REQUEST['logout_token'];
 
-            $jwsTokenSupport = new JWSTokenSupport();
-            $headerCheckerManager = new HeaderCheckerManager(
-                [
-                    new AlgorithmChecker($this->algorithmManagerFactory->aliases()),
-                ],
-                [
-                    $jwsTokenSupport
-                    //new JWETokenSupport(), // Currently not supported in this library
-                ]
-            );
-
-            $serializerManager = new JWSSerializerManager([
-                new CompactSerializer(),
-            ]);
-
-            $jws = $serializerManager->unserialize($logout_token);
+            $jws = $this->jwsSerializerManager->unserialize($logout_token);
 
             if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
                 // Handle JWE; Throw exception as JWE is not supported in this library
@@ -609,14 +591,13 @@ class OpenIDConnectClient
             }
 
             // Verify header
-            $headerCheckerManager->check($jws, 0);
+            $this->headerCheckerManager->check($jws, 0);
 
             // Verify the signature
             $this->verifySignatures($jws);
 
             // Get claims from JWT
             $claims = json_decode($jws->getPayload());
-
 
             // Verify Logout Token Claims
             if ($this->verifyLogoutTokenClaims($claims)) {
@@ -636,23 +617,28 @@ class OpenIDConnectClient
      *
      * @param object $claims
      * @return bool
-     * @throws OpenIDConnectClientException
      */
     public function verifyLogoutTokenClaims(object $claims): bool
     {
-        $clock = new Clock();
-        $claimCheckerManager = new ClaimCheckerManager(
-            [
-                new IssuedAtChecker($clock, $this->getLeeway()),
-                new ExpirationTimeChecker($clock, $this->getLeeway()),
-                new AudienceChecker($this->clientID),
-                new AccessTokenHashChecker($this),
-                new IssuerChecker($this),
-                new EventsChecker('http://schemas.openid.net/event/backchannel-logout'),
-            ]
-        );
+        try {
 
-        $claimCheckerManager->check((array)$claims, ['aud', 'iss', 'iat', 'exp', 'events']);
+            $clock = new Clock();
+            $claimCheckerManager = new ClaimCheckerManager(
+                [
+                    new IssuedAtChecker(allowedTimeDrift: $this->getLeeway(), clock: $clock),
+                    new ExpirationTimeChecker(allowedTimeDrift: $this->getLeeway(), clock: $clock),
+                    new AudienceChecker(audience: $this->clientID),
+                    new AccessTokenHashChecker($this),
+                    new IssuerChecker($this),
+                    new EventsChecker('http://schemas.openid.net/event/backchannel-logout'),
+                ]
+            );
+
+            $claimCheckerManager->check((array)$claims, ['aud', 'iss', 'iat', 'exp', 'events']);
+
+        } catch (MissingMandatoryClaimException | InvalidClaimException) {
+            return false;
+        }
 
         // Verify that the Logout Token doesn't contain a nonce Claim.
         if (isset($claims->nonce)) {
@@ -1353,22 +1339,7 @@ class OpenIDConnectClient
 
         if ($contentType === 'application/jwt') {
 
-            $jwsTokenSupport = new JWSTokenSupport();
-            $headerCheckerManager = new HeaderCheckerManager(
-                [
-                    new AlgorithmChecker($this->algorithmManagerFactory->aliases()),
-                ],
-                [
-                    $jwsTokenSupport
-                    //new JWETokenSupport(), // Currently not supported in this library
-                ]
-            );
-
-            $serializerManager = new JWSSerializerManager([
-                new CompactSerializer(),
-            ]);
-
-            $jws = $serializerManager->unserialize($response);
+            $jws = $this->jwsSerializerManager->unserialize($response);
 
             if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
                 // Handle JWE; Throw exception as JWE is not supported in this library
@@ -1377,7 +1348,7 @@ class OpenIDConnectClient
             }
 
             // Verify header
-            $headerCheckerManager->check($jws, 0);
+            $this->headerCheckerManager->check($jws, 0);
 
             // Verify the signature
             $this->verifySignatures($jws);
@@ -2205,6 +2176,7 @@ class OpenIDConnectClient
     }
 
     /**
+     * @TODO: Add to auth. endpoint
      * @throws OpenIDConnectClientException
      */
     protected function verifyJWKHeader($jwk)
