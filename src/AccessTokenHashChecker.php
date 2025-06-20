@@ -19,7 +19,13 @@ final class AccessTokenHashChecker implements ClaimChecker
             return;
         }
 
-        $bit = substr($this->openIDConnectClient->getIdTokenHeader()->alg, 2, 3);
+        $alg = $this->openIDConnectClient->getIdTokenHeader()->alg;
+
+        $bit = match ($alg) {
+            'EdDSA' => '512',
+            default => substr($alg, 2, 3),
+        };
+
         $len = ((int)$bit) / 16;
         $expected_at_hash = $this->openIDConnectClient->urlEncode(substr(hash('sha'.$bit, $this->openIDConnectClient->getAccessToken(), true), 0, $len));
 
