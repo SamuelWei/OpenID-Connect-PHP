@@ -403,6 +403,14 @@ class OpenIDConnectClient
                 throw new OpenIDConnectClientException('User did not authorize openid scope.');
             }
 
+            if (!property_exists($token_json, 'token_type') || $token_json->token_type !== 'Bearer') {
+                throw new OpenIDConnectClientException('Token type is not Bearer');
+            }
+
+            if (!property_exists($token_json, 'access_token')) {
+                throw new OpenIDConnectClientException('Access token is missing in the response');
+            }
+
             $id_token = $token_json->id_token;
 
             $jws = $this->jwsSerializerManager->unserialize($id_token);
