@@ -753,7 +753,7 @@ class OpenIDConnectClient
             if (count($this->wellKnownConfigParameters) > 0) {
                 $well_known_config_url .= '?' .  http_build_query($this->wellKnownConfigParameters) ;
             }
-            $this->wellKnown = json_decode($this->fetchURL($well_known_config_url), false);
+            $this->wellKnown = json_decode($this->fetchURL($well_known_config_url)->getBody(), false);
         }
 
         $value = $this->wellKnown->{$param} ?? false;
@@ -953,7 +953,7 @@ class OpenIDConnectClient
         // Convert token params to string format
         $post_params = http_build_query($post_data, '', '&', $this->encType);
 
-        return json_decode($this->fetchURL($token_endpoint, $post_params, $headers), false);
+        return json_decode($this->fetchURL($token_endpoint, $post_params, $headers)->getBody(), false);
     }
 
     /**
@@ -993,7 +993,7 @@ class OpenIDConnectClient
         // Convert token params to string format
         $post_params = http_build_query($post_data, '', '&', $this->encType);
 
-        return json_decode($this->fetchURL($token_endpoint, $post_params, $headers), false);
+        return json_decode($this->fetchURL($token_endpoint, $post_params, $headers)->getBody(), false);
     }
 
 
@@ -1068,7 +1068,7 @@ class OpenIDConnectClient
             $headers[] = $authorizationHeader;
         }
 
-        $this->tokenResponse = json_decode($this->fetchURL($token_endpoint, $token_params, $headers), false);
+        $this->tokenResponse = json_decode($this->fetchURL($token_endpoint, $token_params, $headers)->getBody(), false);
 
         return $this->tokenResponse;
     }
@@ -1112,7 +1112,7 @@ class OpenIDConnectClient
         // Convert token params to string format
         $post_params = http_build_query($post_data, null, '&', $this->encType);
 
-        return json_decode($this->fetchURL($token_endpoint, $post_params, $headers), false);
+        return json_decode($this->fetchURL($token_endpoint, $post_params, $headers)->getBody(), false);
     }
 
 
@@ -1163,7 +1163,7 @@ class OpenIDConnectClient
         // Convert token params to string format
         $token_params = http_build_query($token_params, '', '&', $this->encType);
 
-        $json = json_decode($this->fetchURL($token_endpoint, $token_params, $headers), false);
+        $json = json_decode($this->fetchURL($token_endpoint, $token_params, $headers)->getBody(), false);
 
         if (isset($json->access_token)) {
             $this->accessToken = $json->access_token;
@@ -1220,7 +1220,7 @@ class OpenIDConnectClient
                         throw new OpenIDConnectClientException('Unable to verify signature due to no jwks_uri being defined');
                     }
 
-                    $jwkSet = JWKSet::createFromJson($this->fetchURL($jwksUri));
+                    $jwkSet = JWKSet::createFromJson($this->fetchURL($jwksUri)->getBody());
 
                     // Add additional JWKs
                     foreach ($this->additionalJwks as $additionalJwk) {
@@ -1329,9 +1329,10 @@ class OpenIDConnectClient
         $headers = ["Authorization: Bearer $this->accessToken",
             'Accept: application/json'];
 
+
         $response = $this->fetchURL($user_info_endpoint, null, $headers);
-        if ($this->getResponseCode() !== 200) {
-            throw new OpenIDConnectClientException('The communication to retrieve user data has failed with status code '.$this->getResponseCode());
+        if ($response->getStatus() !== 200) {
+            throw new OpenIDConnectClientException('The communication to retrieve user data has failed with status code '.$response->getStatus());
         }
 
         // When we receive application/jwt, the UserInfo Response is signed and/or encrypted.
@@ -1346,16 +1347,16 @@ class OpenIDConnectClient
          */
 
         // Extract the content type from the response (remove optional charset)
-        $contentType = explode(";", $this->getResponseContentType())[0];
+        $contentType = explode(";", $response->getContentType())[0];
 
         if ($contentType === 'application/jwt') {
 
-            $jws = $this->jwsSerializerManager->unserialize($response);
+            $jws = $this->jwsSerializerManager->unserialize($response->getBody());
 
             if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
                 // Handle JWE; Throw exception as JWE is not supported in this library
                 // @TODO: What should be done with the return value?
-                $this->handleJweResponse($response);
+                $this->handleJweResponse($response->getBody());
             }
 
             // Verify header
@@ -1384,7 +1385,7 @@ class OpenIDConnectClient
                 ]
             ))->check((array) $claims, ['sub', 'aud', 'iss']);
         } else {
-            $claims = json_decode($response);
+            $claims = json_decode($response->getBody());
 
             /*
              * The sub (subject) Claim MUST always be returned in the UserInfo Response.
@@ -1450,10 +1451,10 @@ class OpenIDConnectClient
      * @param string $url
      * @param string | null $post_body string If this is set the post type will be POST
      * @param array $headers Extra headers to be sent with the request. Format as 'NameHeader: ValueHeader'
-     * @return bool|string
+     * @return Response
      * @throws OpenIDConnectClientException
      */
-    protected function fetchURL(string $url, ?string $post_body = null, array $headers = [])
+    protected function fetchURL(string $url, ?string $post_body = null, array $headers = []): Response
     {
 
         // OK cool - then let's create a new cURL resource handle
@@ -1540,7 +1541,8 @@ class OpenIDConnectClient
         // Close the cURL resource, and free system resources
         curl_close($ch);
 
-        return $output;
+
+        return new Response($info['http_code'], $info['content_type'], $output);
     }
 
     /**
@@ -1707,9 +1709,7 @@ class OpenIDConnectClient
             'client_name' => $this->getClientName()
         ]);
 
-        $response = $this->fetchURL($registration_endpoint, json_encode($send_object));
-
-        $json_response = json_decode($response, false);
+        $json_response = json_decode($this->fetchURL($registration_endpoint, json_encode($send_object))->getBody(), false);
 
         // Throw some errors if we encounter them
         if ($json_response === false) {
@@ -1771,7 +1771,7 @@ class OpenIDConnectClient
 
         $post_params = http_build_query($post_data, '', '&');
 
-        return json_decode($this->fetchURL($introspection_endpoint, $post_params, $headers), false);
+        return json_decode($this->fetchURL($introspection_endpoint, $post_params, $headers)->getBody(), false);
     }
 
     /**
@@ -1802,7 +1802,7 @@ class OpenIDConnectClient
         $headers = ['Authorization: Basic ' . base64_encode(urlencode($clientId) . ':' . urlencode($clientSecret)),
             'Accept: application/json'];
 
-        return json_decode($this->fetchURL($revocation_endpoint, $post_params, $headers), false);
+        return json_decode($this->fetchURL($revocation_endpoint, $post_params, $headers)->getBody(), false);
     }
 
     /**
@@ -1998,26 +1998,6 @@ class OpenIDConnectClient
     protected function unsetCodeVerifier()
     {
         $this->unsetSessionKey('openid_connect_code_verifier');
-    }
-
-    /**
-     * Get the response code from last action/curl request.
-     *
-     * @return int
-     */
-    public function getResponseCode(): int
-    {
-        return $this->responseCode;
-    }
-
-    /**
-     * Get the content type from last action/curl request.
-     *
-     * @return string|null
-     */
-    public function getResponseContentType()
-    {
-        return $this->responseContentType;
     }
 
     /**
