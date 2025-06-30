@@ -3,13 +3,25 @@
 use Jose\Component\Core\AlgorithmManager;
 use Jose\Component\Core\JWK;
 use Jose\Component\KeyManagement\JWKFactory;
+use Jose\Component\Signature\Algorithm\EdDSA;
+use Jose\Component\Signature\Algorithm\ES256;
+use Jose\Component\Signature\Algorithm\ES384;
+use Jose\Component\Signature\Algorithm\ES512;
+use Jose\Component\Signature\Algorithm\HS256;
+use Jose\Component\Signature\Algorithm\HS384;
+use Jose\Component\Signature\Algorithm\HS512;
+use Jose\Component\Signature\Algorithm\PS256;
+use Jose\Component\Signature\Algorithm\PS384;
+use Jose\Component\Signature\Algorithm\PS512;
 use Jose\Component\Signature\Algorithm\RS256;
+use Jose\Component\Signature\Algorithm\RS384;
+use Jose\Component\Signature\Algorithm\RS512;
+use Jose\Component\Signature\JWS;
 use Jose\Component\Signature\JWSBuilder;
 use Jose\Component\Signature\Serializer\CompactSerializer;
 use Jumbojett\OpenIDConnectClient;
 use Jumbojett\OpenIDConnectClientException;
 use Jumbojett\Response;
-use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 
 class OpenIDConnectClientTest extends TestCase
@@ -594,20 +606,576 @@ class OpenIDConnectClientTest extends TestCase
         $this->assertEquals(100, $client->getLeeway());
     }
 
-    public function signClaims(array $claims, JWK $privateKey, array $additionalHeaders = []): string
+    public function testVerifyJWSWithRSASSA()
+    {
+        // Create a new RSA key pairs for signing the ID token
+        $pkRS256 = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS256',
+                'use' => 'sig'
+            ]
+        );
+        $kidRS256 = bin2hex(random_bytes(6));
+
+        $pkRS384 = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS384',
+                'use' => 'sig'
+            ]
+        );
+        $kidRS384 = bin2hex(random_bytes(6));
+
+        $pkRS512 = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS512',
+                'use' => 'sig'
+            ]
+        );
+        $kidRS512 = bin2hex(random_bytes(6));
+
+        // List of JWKs to be returned by the JWKS endpoint
+        $jwks = [
+            [
+                'kid' => $kidRS256,
+                ...$pkRS256->toPublic()->jsonSerialize()
+            ],
+            [
+                'kid' => $kidRS384,
+                ...$pkRS384->toPublic()->jsonSerialize()
+            ],
+            [
+                'kid' => $kidRS512,
+                ...$pkRS512->toPublic()->jsonSerialize()
+            ]
+        ];
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function ($url) use ($jwks) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/jwks':
+                        return new Response(200, 'application/json', json_encode([
+                            'keys' => $jwks
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        // RS256
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS256, 'RS256', ['kid' => $kidRS256])));
+
+        // RS384
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS384, 'RS384', ['kid' => $kidRS384])));
+
+        // RS512
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS512, 'RS512', ['kid' => $kidRS512])));
+
+        // Without kid
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS256, 'RS256')));
+
+        // With wrong kid
+        $this->expectException(OpenIDConnectClientException::class);
+        $this->assertFalse($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS256, 'RS256', ['kid' => 'wrong-kid'])));
+    }
+    public function testVerifyJWSWithRSASSA_PSS()
+    {
+        // Create a new RSA key pairs for signing the ID token
+        $pkPS256 = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'PS256',
+                'use' => 'sig'
+            ]
+        );
+        $kidPS256 = bin2hex(random_bytes(6));
+
+        $pkPS384 = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'PS384',
+                'use' => 'sig'
+            ]
+        );
+        $kidPS384 = bin2hex(random_bytes(6));
+
+        $pkPS512 = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'PS512',
+                'use' => 'sig'
+            ]
+        );
+        $kidPS512 = bin2hex(random_bytes(6));
+
+        // List of JWKs to be returned by the JWKS endpoint
+        $jwks = [
+            [
+                'kid' => $kidPS256,
+                ...$pkPS256->toPublic()->jsonSerialize()
+            ],
+            [
+                'kid' => $kidPS384,
+                ...$pkPS384->toPublic()->jsonSerialize()
+            ],
+            [
+                'kid' => $kidPS512,
+                ...$pkPS512->toPublic()->jsonSerialize()
+            ]
+        ];
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function ($url) use ($jwks) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/jwks':
+                        return new Response(200, 'application/json', json_encode([
+                            'keys' => $jwks
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        // PS256
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkPS256, 'PS256', ['kid' => $kidPS256])));
+
+        // PS384
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkPS384, 'PS384', ['kid' => $kidPS384])));
+
+        // PS512
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkPS512, 'PS512', ['kid' => $kidPS512])));
+
+        // Without kid
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkPS256, 'PS256')));
+
+        // With wrong kid
+        $this->expectException(OpenIDConnectClientException::class);
+        $this->assertFalse($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkPS256, 'PS256', ['kid' => 'wrong-kid'])));
+    }
+
+    public function testVerifyJWSWithECDSA()
+    {
+        // Create a new elliptic curve key pairs for signing the ID token
+        $pkES256 = JWKFactory::createECKey('P-256');
+        $kidES256 = bin2hex(random_bytes(6));
+
+        $pkES384 = JWKFactory::createECKey('P-384');
+        $kidES384 = bin2hex(random_bytes(6));
+
+        $pkES512 = JWKFactory::createECKey('P-521');
+        $kidES512 = bin2hex(random_bytes(6));
+
+        // List of JWKs to be returned by the JWKS endpoint
+        $jwks = [
+            [
+                'kid' => $kidES256,
+                ...$pkES256->toPublic()->jsonSerialize()
+            ],
+            [
+                'kid' => $kidES384,
+                ...$pkES384->toPublic()->jsonSerialize()
+            ],
+            [
+                'kid' => $kidES512,
+                ...$pkES512->toPublic()->jsonSerialize()
+            ]
+        ];
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function ($url) use ($jwks) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/jwks':
+                        return new Response(200, 'application/json', json_encode([
+                            'keys' => $jwks
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        // ES256
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkES256, 'ES256', ['kid' => $kidES256])));
+
+        // ES384
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkES384, 'ES384', ['kid' => $kidES384])));
+
+        // ES512
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkES512, 'ES512', ['kid' => $kidES512])));
+
+        // Without kid
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkES256, 'ES256')));
+
+        // With wrong kid
+        $this->expectException(OpenIDConnectClientException::class);
+        $this->assertFalse($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkES256, 'ES256', ['kid' => 'wrong-kid'])));
+    }
+
+    public function testVerifyJWSWithEdDSA()
+    {
+        // Create octet key pair for signing the ID token
+        $pkEd25519 = JWKFactory::createOKPKey('Ed25519');
+        $kidEd25519 = bin2hex(random_bytes(6));
+
+        // List of JWKs to be returned by the JWKS endpoint
+        $jwks = [
+            [
+                'kid' => $kidEd25519,
+                ...$pkEd25519->toPublic()->jsonSerialize()
+            ]
+        ];
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function ($url) use ($jwks) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/jwks':
+                        return new Response(200, 'application/json', json_encode([
+                            'keys' => $jwks
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        // Ed25519
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkEd25519, 'EdDSA', ['kid' => $kidEd25519])));
+
+        // Without kid
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkEd25519, 'EdDSA')));
+
+        // With wrong kid
+        $this->expectException(OpenIDConnectClientException::class);
+        $this->assertFalse($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkEd25519, 'EdDSA', ['kid' => 'wrong-kid'])));
+    }
+
+    public function testVerifyJWSWithHMAC()
+    {
+
+        $clientSecret = bin2hex(random_bytes(32));
+
+        $keyHS256 = JWKFactory::createFromSecret(
+            $clientSecret,
+            [
+                'alg' => 'HS256',
+                'use' => 'sig'
+            ]
+        );
+        $keyHS384 = JWKFactory::createFromSecret(
+            $clientSecret,
+            [
+                'alg' => 'HS384',
+                'use' => 'sig'
+            ]
+        );
+        $keyHS512 = JWKFactory::createFromSecret(
+            $clientSecret,
+            [
+                'alg' => 'HS512',
+                'use' => 'sig'
+            ]
+        );
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = new OpenIDConnectClient(
+            'https://example.org',
+            'fake-client-id',
+            $clientSecret,
+        );
+
+        // HS256
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $keyHS256, 'HS256')));
+
+        // HS384
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $keyHS384, 'HS384')));
+
+        // HS512
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $keyHS512, 'HS512')));
+
+
+        // Create wrong key
+        $wrongKeyHS256 = JWKFactory::createFromSecret(
+            bin2hex(random_bytes(32)),
+            [
+                'alg' => 'HS256',
+                'use' => 'sig'
+            ]
+        );
+
+        $this->assertFalse($client->verifyJWS($this->createJWS(['sub' => 'test'], $wrongKeyHS256, 'HS256')));
+    }
+    public function testVerifyJWSWExceptionThrowsExceptionKeyNotFound()
+    {
+        // Create a new RSA key pair for signing the ID token
+        $pkRS256 = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS256',
+                'use' => 'sig'
+            ]
+        );
+        $kidRS256 = bin2hex(random_bytes(6));
+
+        $pkRS256Other = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS256',
+                'use' => 'sig'
+            ]
+        );
+        $kidRS256Other = bin2hex(random_bytes(6));
+
+        // List of JWKs to be returned by the JWKS endpoint
+        $jwks = [
+            [
+                'kid' => $kidRS256,
+                ...$pkRS256->toPublic()->jsonSerialize()
+            ],
+        ];
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function ($url) use ($jwks) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/jwks':
+                        return new Response(200, 'application/json', json_encode([
+                            'keys' => $jwks
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        // RS256, without listing the used key in the JWKS
+        $this->expectException(OpenIDConnectClientException::class);
+        $this->expectException($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS256Other, 'RS256', ['kid' => $kidRS256Other])));
+    }
+
+    public function testVerifyJWSWUsesAdditionalJWKs()
+    {
+        // Create a new RSA key pair for signing the ID token
+        $pkRS256 = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS256',
+                'use' => 'sig'
+            ]
+        );
+        $kidRS256 = bin2hex(random_bytes(6));
+
+        $pkRS256Other = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS256',
+                'use' => 'sig'
+            ]
+        );
+        $kidRS256Other = bin2hex(random_bytes(6));
+
+        // List of JWKs to be returned by the JWKS endpoint
+        $jwks = [
+            [
+                'kid' => $kidRS256,
+                ...$pkRS256->toPublic()->jsonSerialize()
+            ],
+        ];
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function ($url) use ($jwks) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/jwks':
+                        return new Response(200, 'application/json', json_encode([
+                            'keys' => $jwks
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        // Add the additional JWKs
+        $client->addAdditionalJwk((object)[
+            'kid' => $kidRS256Other,
+            ...$pkRS256Other->toPublic()->jsonSerialize()
+        ]);
+
+        // RS256, with listing the used key in the JWKS
+        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS256Other, 'RS256', ['kid' => $kidRS256Other])));
+
+    }
+
+    public function createJWS(array $claims, JWK $privateKey, string $alg, array $additionalHeaders = []): JWS
     {
         $algorithmManager = new AlgorithmManager([
             new RS256(),
+            new RS384(),
+            new RS512(),
+
+            new PS256(),
+            new PS384(),
+            new PS512(),
+
+            new ES256(),
+            new ES384(),
+            new ES512(),
+
+            new EdDSA(),
+
+            new HS256(),
+            new HS384(),
+            new HS512(),
         ]);
+
         $jwsBuilder = new JWSBuilder($algorithmManager);
 
         $payload = json_encode($claims);
 
-        $jws = $jwsBuilder
+        return $jwsBuilder
             ->create()
             ->withPayload($payload)
-            ->addSignature($privateKey, ['alg' => $privateKey->get('alg'), ...$additionalHeaders])
+            ->addSignature($privateKey, ['alg' => $alg, ...$additionalHeaders])
             ->build();
+    }
+
+    public function signClaims(array $claims, JWK $privateKey, string $alg, array $additionalHeaders = []): string
+    {
+        $jws = $this->createJWS($claims, $privateKey, $alg, $additionalHeaders);
 
         $serializer = new CompactSerializer();
         return $serializer->serialize($jws, 0);
@@ -651,7 +1219,7 @@ class OpenIDConnectClientTest extends TestCase
         ];
 
         // Create id token
-        $idToken = $this->signClaims($claims, $private_key, ['kid' => $kid]);
+        $idToken = $this->signClaims($claims, $private_key, 'RS256', ['kid' => $kid]);
 
         // List of JWKs to be returned by the JWKS endpoint
         $jwks = [[
@@ -773,7 +1341,7 @@ class OpenIDConnectClientTest extends TestCase
         ];
 
         // Create id token
-        $idToken = $this->signClaims($claims, $invalid_private_key, ['kid' => $kid]);
+        $idToken = $this->signClaims($claims, $invalid_private_key, 'RS256', ['kid' => $kid]);
 
         // List of JWKs to be returned by the JWKS endpoint
         $jwks = [[
@@ -871,7 +1439,7 @@ class OpenIDConnectClientTest extends TestCase
         ];
 
         // Create id token
-        $idToken = $this->signClaims($claims, $private_key, ['kid' => $kid]);
+        $idToken = $this->signClaims($claims, $private_key, 'RS256', ['kid' => $kid]);
 
         // List of JWKs to be returned by the JWKS endpoint
         $jwks = [[
@@ -994,7 +1562,7 @@ class OpenIDConnectClientTest extends TestCase
         ];
 
         // Create id token
-        $idToken = $this->signClaims($idTokenClaims, $private_key, ['kid' => $kid]);
+        $idToken = $this->signClaims($idTokenClaims, $private_key, 'RS256', ['kid' => $kid]);
 
         // List of JWKs to be returned by the JWKS endpoint
         $jwks = [[
@@ -1108,7 +1676,7 @@ class OpenIDConnectClientTest extends TestCase
         ];
 
         // Create id token
-        $idToken = $this->signClaims($idTokenClaims, $private_key, ['kid' => $kid]);
+        $idToken = $this->signClaims($idTokenClaims, $private_key, 'RS256', ['kid' => $kid]);
 
         // List of JWKs to be returned by the JWKS endpoint
         $jwks = [[
@@ -1116,7 +1684,7 @@ class OpenIDConnectClientTest extends TestCase
             ...$public_key->jsonSerialize()
         ]];
 
-        $userInfoResponse = $this->signClaims($userInfoClaims, $private_key, ['kid' => $kid]);
+        $userInfoResponse = $this->signClaims($userInfoClaims, $private_key, 'RS256', ['kid' => $kid]);
 
         // Mock the OpenIDConnectClient, only mocking the fetchURL method
         $client = $this->getMockBuilder(OpenIDConnectClient::class)
