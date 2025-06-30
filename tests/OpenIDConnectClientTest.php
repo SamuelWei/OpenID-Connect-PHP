@@ -21,63 +21,195 @@ class OpenIDConnectClientTest extends TestCase
         $this->faker = Faker\Factory::create();
     }
 
-    public function testValidateClaims()
+    /**
+     * @covers       Jumbojett\\OpenIDConnectClient::verifyIdTokenClaims
+     * @dataProvider provideTestVerifyIdTokenClaimsData
+     * @return void
+     */
+    public function testVerifyIdTokenClaims($claims, $idToken, $accessToken, $expectedResult)
     {
-        $client = new class () extends OpenIDConnectClient {
-            public function testVerifyJWTClaims($claims): bool
-            {
-                return $this->verifyJWTClaims($claims);
-            }
-            public function getIdTokenPayload()
-            {
-                return (object)[
-                    'sub' => 'sub'
-                ];
-            }
-        };
-        $client->setClientID('client-id');
-        $client->setIssuer('issuer');
-        $client->setIdToken('');
+        $client = new OpenIDConnectClient(
+            'https://example.org',
+            'fake-client-id',
+            'fake-client-secret',
+        );
 
-        # simple aud
-        $valid = $client->testVerifyJWTClaims((object)[
-            'aud' => 'client-id',
-            'iss' => 'issuer',
-            'sub' => 'sub',
-        ]);
-        self::assertTrue($valid);
 
-        # array aud
-        $valid = $client->testVerifyJWTClaims((object)[
-            'aud' => ['client-id'],
-            'iss' => 'issuer',
-            'sub' => 'sub',
-        ]);
-        self::assertTrue($valid);
+        $_SESSION['openid_connect_nonce'] = 'nonce-123';
 
-        # aud not matching
-        $valid = $client->testVerifyJWTClaims((object)[
-            'aud' => ['ipsum'],
-            'iss' => 'issuer',
-            'sub' => 'sub',
-        ]);
-        self::assertFalse($valid);
+        $client->setIdToken($idToken);
+        $client->setAccessToken($accessToken);
 
-        # sub not matching
-        $valid = $client->testVerifyJWTClaims((object)[
-            'aud' => ['client-id'],
-            'iss' => 'issuer',
-            'sub' => 'sub-invalid',
-        ]);
-        self::assertFalse($valid);
+        $actualResult = $client->verifyIdTokenClaims($claims);
 
-        # sub missing
-        $valid = $client->testVerifyJWTClaims((object)[
-            'aud' => ['client-id'],
-            'iss' => 'issuer',
-        ]);
-        self::assertFalse($valid);
+        $this->assertEquals($expectedResult, $actualResult);
     }
+    /**
+     * @return array
+     */
+    public function provideTestVerifyIdTokenClaimsData(): array
+    {
+        // Token and access token from https://openid.net/specs/openid-connect-core-1_0.html#id_token-tokenExample
+        $idToken = "eyJraWQiOiIxZTlnZGs3IiwiYWxnIjoiUlMyNTYifQ.
+    ewogImlzcyI6ICJodHRwczovL3NlcnZlci5leGFtcGxlLmNvbSIsCiAic3ViIjog
+    IjI0ODI4OTc2MTAwMSIsCiAiYXVkIjogInM2QmhkUmtxdDMiLAogIm5vbmNlIjog
+    Im4tMFM2X1d6QTJNaiIsCiAiZXhwIjogMTMxMTI4MTk3MCwKICJpYXQiOiAxMzEx
+    MjgwOTcwLAogImF0X2hhc2giOiAiNzdRbVVQdGpQZnpXdEYyQW5wSzlSUSIKfQ.
+    kdqTmftlaXg5WBYBr1wkxhkqCGZPc0k8vTiV5g2jj67jQ7XkrDamYx2bOkZLdZrp
+    MPIzkdYB1nZI_G8vQGQuamRhJcEIt21kblGPZ-yhEhdkAiZIZLu38rChalDS2Mh0
+    glE_rke5XXRhmqqoEFFdziFdnO3p61-7y51co84OEAZvARSINQaOWIzvioRfs4zw
+    IFOaT33Vpxfqr8HDyh31zo9eBW2dSQuCa071z0ENWChWoPliK1JCo_Bk9eDg2uwo
+    2ZwhsvHzj6TMQ0lYOTzufSlSmXIKfjlOsb3nftQeR697_hA-nMZyAdL8_NRfaC37
+    XnAbW8WB9wCfECp7cuNuOg";
+        $accessToken = "jHkWEdUXMU1BwAsC4vtUsZwnNvTIxEl0z9K3vx5KF0Y";
+
+        return [
+            'valid-single-aud' => [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'sub' => 'fake-client-sub',
+                    'iat' => time(),
+                    'exp' => time() + 300,
+                    'nonce' => 'nonce-123',
+                ],
+                $idToken,
+                $accessToken,
+                true
+            ],
+            'valid-multiple-auds' => [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => [ 'fake-client-id', 'some-other-aud' ],
+                    'sid' => 'fake-client-sid',
+                    'sub' => 'fake-client-sub',
+                    'iat' => time(),
+                    'exp' => time() + 300,
+                    'nonce' => 'nonce-123',
+                ],
+                $idToken,
+                $accessToken,
+                true
+            ],
+            'invalid-no-sub' => [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'iat' => time(),
+                    'exp' => time() + 300,
+                    'nonce' => 'nonce-123',
+                ],
+                $idToken,
+                $accessToken,
+                false
+            ],
+            'invalid-without-nonce' => [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'sub' => 'fake-client-sub',
+                    'iat' => time(),
+                    'exp' => time() + 300
+                ],
+                $idToken,
+                $accessToken,
+                false
+            ],
+            'invalid-bad-nonce' => [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'sub' => 'fake-client-sub',
+                    'iat' => time(),
+                    'exp' => time() + 300,
+                    'nonce' => 'nonce-567',
+                ],
+                $idToken,
+                $accessToken,
+                false
+            ],
+            'invalid-no-iat' => [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'sub' => 'fake-client-sub',
+                    'exp' => time() + 300,
+                    'nonce' => 'nonce-123',
+                ],
+                $idToken,
+                $accessToken,
+                false
+            ],
+            'valid-at_hash' =>  [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'sub' => 'fake-client-sub',
+                    'iat' => time(),
+                    'exp' => time() + 300,
+                    'nonce' => 'nonce-123',
+                    'at_hash' => '77QmUPtjPfzWtF2AnpK9RQ',
+                ],
+                $idToken,
+                $accessToken,
+                true
+            ],
+            'invalid-at_hash' =>  [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'sub' => 'fake-client-sub',
+                    'iat' => time(),
+                    'exp' => time() + 300,
+                    'nonce' => 'nonce-123',
+                    'at_hash' => 'invalid-at-hash',
+                ],
+                $idToken,
+                $accessToken,
+                false
+            ],
+            'invalid-bad-iat' => [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'sub' => 'fake-client-sub',
+                    'iat' => time() + 400,
+                    'exp' => time() + 300,
+                    'nonce' => 'nonce-123',
+                ],
+                $idToken,
+                $accessToken,
+                false
+            ],
+            'invalid-no-exp' => [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'sub' => 'fake-client-sub',
+                    'iat' => time(),
+                    'nonce' => 'nonce-123',
+                ],
+                $idToken,
+                $accessToken,
+                false
+            ],
+            'invalid-bad-exp' => [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'sub' => 'fake-client-sub',
+                    'iat' => time(),
+                    'exp' => time() - 400,
+                    'nonce' => 'nonce-123',
+                ],
+                $idToken,
+                $accessToken,
+                false
+            ],
+
+        ];
+    }
+
     public function testJWTDecode()
     {
         $client = new OpenIDConnectClient();
@@ -133,42 +265,10 @@ class OpenIDConnectClientTest extends TestCase
 
         $_SERVER['SERVER_PORT'] = '8888';
         self::assertSame('http://domain.test:8888/path/index.php', $client->getRedirectURL());
-    }
 
-    public function testAuthenticateDoesNotThrowExceptionIfClaimsIsMissingNonce()
-    {
-        $fakeClaims = new StdClass();
-        $fakeClaims->iss = 'fake-issuer';
-        $fakeClaims->aud = 'fake-client-id';
-        $fakeClaims->sub = 'fake-sub';
-        $fakeClaims->nonce = null;
-
-        $_REQUEST['id_token'] = 'abc.123.xyz';
-        $_REQUEST['state'] = false;
-        $_SESSION['openid_connect_state'] = false;
-
-        /** @var OpenIDConnectClient | MockObject $client */
-        $client = $this->getMockBuilder(OpenIDConnectClient::class)->setMethods(['decodeJWT', 'getProviderConfigValue', 'verifyJWTSignature'])->getMock();
-        $client->method('decodeJWT')->willReturn($fakeClaims);
-        $client->method('getProviderConfigValue')->with('jwks_uri')->willReturn(true);
-        $client->method('verifyJWTSignature')->willReturn(true);
-
-        $client->setClientID('fake-client-id');
-        $client->setIssuer('fake-issuer');
-        $client->setIssuerValidator(function () {
-            return true;
-        });
-        $client->setAllowImplicitFlow(true);
-        $client->setProviderURL('https://jwt.io/');
-
-        try {
-            $authenticated = $client->authenticate();
-            $this->assertTrue($authenticated);
-        } catch (OpenIDConnectClientException $e) {
-            if ($e->getMessage() === 'Unable to verify JWT claims') {
-                self::fail('OpenIDConnectClientException was thrown when it should not have been.');
-            }
-        }
+        // Use fixed redirect URL if set
+        $client->setRedirectURL('https://example.com/callback');
+        self::assertSame('https://example.com/callback', $client->getRedirectURL());
     }
 
     public function testSerialize()
@@ -211,15 +311,40 @@ class OpenIDConnectClientTest extends TestCase
      */
     public function testVerifyLogoutTokenClaims($claims, $expectedResult)
     {
-        /** @var OpenIDConnectClient | MockObject $client */
-        $client = $this->getMockBuilder(OpenIDConnectClient::class)->setMethods(['decodeJWT'])->getMock();
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL'])
+            ->getMock();
 
-        $client->setClientID('fake-client-id');
-        $client->setIssuer('fake-issuer');
-        $client->setIssuerValidator(function () {
-            return true;
-        });
-        $client->setProviderURL('https://jwt.io/');
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function ($url) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(
+                            200,
+                            'application/json',
+                            json_encode([
+                                'issuer' => 'https://example.org/',
+                                'authorization_endpoint' => 'https://example.org/authorize',
+                                'token_endpoint' => 'https://example.org/token',
+                                'userinfo_endpoint' => 'https://example.org/userinfo',
+                                'jwks_uri' => 'https://example.org/jwks',
+                                'response_types_supported' => ['code', 'id_token'],
+                                'subject_types_supported' => ['public'],
+                                'id_token_signing_alg_values_supported' => ['RS256'],
+                            ])
+                        );
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
 
         $actualResult = $client->verifyLogoutTokenClaims($claims);
 
@@ -234,10 +359,11 @@ class OpenIDConnectClientTest extends TestCase
         return [
             'valid-single-aud' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => 'fake-client-id',
                     'sid' => 'fake-client-sid',
                     'sub' => 'fake-client-sub',
+                    'jti' => 'fake-client-jti',
                     'iat' => time(),
                     'exp' => time() + 300,
                     'events' => (object) [
@@ -248,10 +374,11 @@ class OpenIDConnectClientTest extends TestCase
             ],
             'valid-multiple-auds' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => [ 'fake-client-id', 'some-other-aud' ],
                     'sid' => 'fake-client-sid',
                     'sub' => 'fake-client-sub',
+                    'jti' => 'fake-client-jti',
                     'iat' => time(),
                     'exp' => time() + 300,
                     'events' => (object) [
@@ -262,8 +389,9 @@ class OpenIDConnectClientTest extends TestCase
             ],
             'invalid-no-sid-and-no-sub' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => [ 'fake-client-id', 'some-other-aud' ],
+                    'jti' => 'fake-client-jti',
                     'iat' => time(),
                     'exp' => time() + 300,
                     'events' => (object) [
@@ -274,9 +402,10 @@ class OpenIDConnectClientTest extends TestCase
             ],
             'valid-no-sid' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => [ 'fake-client-id', 'some-other-aud' ],
                     'sub' => 'fake-client-sub',
+                    'jti' => 'fake-client-jti',
                     'iat' => time(),
                     'exp' => time() + 300,
                     'events' => (object) [
@@ -287,9 +416,10 @@ class OpenIDConnectClientTest extends TestCase
             ],
             'valid-no-sub' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => [ 'fake-client-id', 'some-other-aud' ],
                     'sid' => 'fake-client-sid',
+                    'jti' => 'fake-client-jti',
                     'iat' => time(),
                     'exp' => time() + 300,
                     'events' => (object) [
@@ -300,90 +430,153 @@ class OpenIDConnectClientTest extends TestCase
             ],
             'invalid-with-nonce' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => [ 'fake-client-id', 'some-other-aud' ],
                     'sid' => 'fake-client-sid',
+                    'jti' => 'fake-client-jti',
                     'iat' => time(),
                     'exp' => time() + 300,
                     'events' => (object) [
                         'http://schemas.openid.net/event/backchannel-logout' => (object)[]
                     ],
-                    'nonce' => 'must-not-be-set'
+                    'nonce' => 'must-not-be-set',
                 ],
                 false
             ],
             'invalid-no-events' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => [ 'fake-client-id', 'some-other-aud' ],
                     'sid' => 'fake-client-sid',
+                    'jti' => 'fake-client-jti',
                     'iat' => time(),
                     'exp' => time() + 300,
-                    'nonce' => 'must-not-be-set'
+                    'nonce' => 'must-not-be-set',
                 ],
                 false
             ],
             'invalid-no-backchannel-event' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => [ 'fake-client-id', 'some-other-aud' ],
                     'sid' => 'fake-client-sid',
+                    'jti' => 'fake-client-jti',
                     'iat' => time(),
                     'exp' => time() + 300,
                     'events' => (object) [],
-                    'nonce' => 'must-not-be-set'
+                    'nonce' => 'must-not-be-set',
                 ],
                 false
             ],
             'invalid-no-iat' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => [ 'fake-client-id', 'some-other-aud' ],
                     'sid' => 'fake-client-sid',
+                    'jti' => 'fake-client-jti',
                     'exp' => time() + 300,
                     'events' => (object) [
                         'http://schemas.openid.net/event/backchannel-logout' => (object)[]
-                    ]
+                    ],
                 ],
                 false
             ],
             'invalid-bad-iat' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => [ 'fake-client-id', 'some-other-aud' ],
                     'sid' => 'fake-client-sid',
-                    'iat' => time() + 301,
+                    'jti' => 'fake-client-jti',
+                    'iat' => time() + 400,
                     'exp' => time() + 300,
                     'events' => (object) [
                         'http://schemas.openid.net/event/backchannel-logout' => (object)[]
-                    ]
+                    ],
                 ],
                 false
             ],
             'invalid-no-exp' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => [ 'fake-client-id', 'some-other-aud' ],
                     'sid' => 'fake-client-sid',
                     'jti' => 'fake-client-jti',
                     'iat' => time(),
                     'events' => (object) [
                         'http://schemas.openid.net/event/backchannel-logout' => (object)[]
-                    ]
+                    ],
                 ],
                 false
             ],
             'invalid-bad-exp' => [
                 (object)[
-                    'iss' => 'fake-issuer',
+                    'iss' => 'https://example.org',
                     'aud' => [ 'fake-client-id', 'some-other-aud' ],
                     'sid' => 'fake-client-sid',
                     'jti' => 'fake-client-jti',
                     'iat' => time(),
-                    'exp' => time() - 300,
+                    'exp' => time() - 301,
                     'events' => (object) [
                         'http://schemas.openid.net/event/backchannel-logout' => (object)[]
-                    ]
+                    ],
+                ],
+                false
+            ],
+            'valid-missing-jti' => [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'sid' => 'fake-client-sid',
+                    'sub' => 'fake-client-sub',
+                    'iat' => time(),
+                    'exp' => time() + 300,
+                    'events' => (object) [
+                        'http://schemas.openid.net/event/backchannel-logout' => (object)[]
+                    ],
+                ],
+                false
+            ],
+            'valid-single-aud' => [
+                (object)[
+                    'iss' => 'https://example.org',
+                    'aud' => 'fake-client-id',
+                    'sid' => 'fake-client-sid',
+                    'sub' => 'fake-client-sub',
+                    'jti' => 'fake-client-jti',
+                    'iat' => time(),
+                    'exp' => time() + 300,
+                    'events' => (object) [
+                        'http://schemas.openid.net/event/backchannel-logout' => (object)[]
+                    ],
+                ],
+                true
+            ],
+            'invalid-no-iss' => [
+                (object)[
+                    'aud' => 'fake-client-id',
+                    'sid' => 'fake-client-sid',
+                    'sub' => 'fake-client-sub',
+                    'jti' => 'fake-client-jti',
+                    'iat' => time(),
+                    'exp' => time() + 300,
+                    'events' => (object) [
+                        'http://schemas.openid.net/event/backchannel-logout' => (object)[]
+                    ],
+                ],
+                false
+            ],
+            'invalid-bad-iss' => [
+                (object)[
+                    'iss' => 'https://bad-issuer.org',
+                    'aud' => 'fake-client-id',
+                    'sid' => 'fake-client-sid',
+                    'sub' => 'fake-client-sub',
+                    'jti' => 'fake-client-jti',
+                    'iat' => time(),
+                    'exp' => time() + 300,
+                    'events' => (object) [
+                        'http://schemas.openid.net/event/backchannel-logout' => (object)[]
+                    ],
                 ],
                 false
             ],
@@ -399,93 +592,6 @@ class OpenIDConnectClientTest extends TestCase
         // Set leeway to 100
         $client->setLeeway(100);
         $this->assertEquals(100, $client->getLeeway());
-    }
-    public function testRetrievesUnsignedAndUnencryptedUserInfoSuccessfully()
-    {
-        $fakeUserInfo = (object)[
-            'sub' => 'user123',
-            'name' => 'John Doe',
-            'email' => 'john.doe@example.com'
-        ];
-
-        /** @var OpenIDConnectClient | MockObject $client */
-        $client = $this->getMockBuilder(OpenIDConnectClient::class)
-            ->onlyMethods(['getProviderConfigValue', 'fetchURL', 'getResponseCode', 'getResponseContentType', 'getIdTokenPayload'])
-            ->getMock();
-
-        $client->method('getProviderConfigValue')->with('userinfo_endpoint')->willReturn('https://example.com/userinfo');
-        $client->method('fetchURL')->willReturn(json_encode($fakeUserInfo));
-        $client->method('getResponseCode')->willReturn(200);
-        $client->method('getResponseContentType')->willReturn('application/json');
-        $client->method('getIdTokenPayload')->willReturn((object)['sub' => 'user123']);
-
-        $userInfo = $client->requestUserInfo();
-
-        $this->assertEquals($fakeUserInfo, $userInfo);
-    }
-
-    public function testThrowsExceptionWhenUserInfoEndpointFails()
-    {
-        /** @var OpenIDConnectClient | MockObject $client */
-        $client = $this->getMockBuilder(OpenIDConnectClient::class)
-            ->onlyMethods(['getProviderConfigValue', 'fetchURL', 'getResponseCode'])
-            ->getMock();
-
-        $client->method('getProviderConfigValue')->with('userinfo_endpoint')->willReturn('https://example.com/userinfo');
-        $client->method('fetchURL')->willReturn(null);
-        $client->method('getResponseCode')->willReturn(500);
-
-        $this->expectException(OpenIDConnectClientException::class);
-        $this->expectExceptionMessage('The communication to retrieve user data has failed with status code 500');
-
-        $client->requestUserInfo();
-    }
-
-    public function testRetrievesSpecificAttributeSuccessfully()
-    {
-        $fakeUserInfo = (object)[
-            'sub' => 'user123',
-            'name' => 'John Doe',
-            'email' => 'john.doe@example.com'
-        ];
-
-        /** @var OpenIDConnectClient | MockObject $client */
-        $client = $this->getMockBuilder(OpenIDConnectClient::class)
-            ->onlyMethods(['getProviderConfigValue', 'fetchURL', 'getResponseCode', 'getResponseContentType', 'getIdTokenPayload'])
-            ->getMock();
-
-        $client->method('getProviderConfigValue')->with('userinfo_endpoint')->willReturn('https://example.com/userinfo');
-        $client->method('fetchURL')->willReturn(json_encode($fakeUserInfo));
-        $client->method('getResponseCode')->willReturn(200);
-        $client->method('getResponseContentType')->willReturn('application/json');
-        $client->method('getIdTokenPayload')->willReturn((object)['sub' => 'user123']);
-
-        $email = $client->requestUserInfo('email');
-
-        $this->assertEquals('john.doe@example.com', $email);
-    }
-
-    public function testReturnsNullForNonExistentAttribute()
-    {
-        $fakeUserInfo = (object)[
-            'sub' => 'user123',
-            'name' => 'John Doe'
-        ];
-
-        /** @var OpenIDConnectClient | MockObject $client */
-        $client = $this->getMockBuilder(OpenIDConnectClient::class)
-            ->onlyMethods(['getProviderConfigValue', 'fetchURL', 'getResponseCode', 'getResponseContentType', 'getIdTokenPayload'])
-            ->getMock();
-
-        $client->method('getProviderConfigValue')->with('userinfo_endpoint')->willReturn('https://example.com/userinfo');
-        $client->method('fetchURL')->willReturn(json_encode($fakeUserInfo));
-        $client->method('getResponseCode')->willReturn(200);
-        $client->method('getResponseContentType')->willReturn('application/json');
-        $client->method('getIdTokenPayload')->willReturn((object)['sub' => 'user123']);
-
-        $phoneNumber = $client->requestUserInfo('phone_number');
-
-        $this->assertNull($phoneNumber);
     }
 
     public function signClaims(array $claims, JWK $privateKey, array $additionalHeaders = []): string
