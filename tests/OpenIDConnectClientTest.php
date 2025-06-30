@@ -10,7 +10,7 @@ use Jumbojett\OpenIDConnectClient;
 use Jumbojett\OpenIDConnectClientException;
 use Jumbojett\Response;
 use PHPUnit\Framework\MockObject\MockObject;
-use Yoast\PHPUnitPolyfills\TestCases\TestCase;
+use PHPUnit\Framework\TestCase;
 
 class OpenIDConnectClientTest extends TestCase
 {

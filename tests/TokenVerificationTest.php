@@ -4,7 +4,7 @@
 use Jumbojett\OpenIDConnectClient;
 use Jumbojett\OpenIDConnectClientException;
 use PHPUnit\Framework\MockObject\MockObject;
-use Yoast\PHPUnitPolyfills\TestCases\TestCase;
+use PHPUnit\Framework\TestCase;
 
 class TokenVerificationTest extends TestCase
 {
