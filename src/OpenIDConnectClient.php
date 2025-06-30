@@ -1269,20 +1269,6 @@ class OpenIDConnectClient
         }
     }
 
-    /**
-     * @param string $iss
-     * @return bool
-     * @throws OpenIDConnectClientException
-     */
-    protected function validateIssuer(string $iss): bool
-    {
-        if ($this->issuerValidator !== null) {
-            return $this->issuerValidator->__invoke($iss);
-        }
-
-        return ($iss === $this->getIssuer() || $iss === $this->getWellKnownIssuer() || $iss === $this->getWellKnownIssuer(true));
-    }
-
     public function urlEncode(string $str): string
     {
         $enc = base64_encode($str);
