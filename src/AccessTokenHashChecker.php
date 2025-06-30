@@ -14,11 +14,6 @@ final class AccessTokenHashChecker implements ClaimChecker
 
     public function checkClaim($value): void
     {
-        // Skip if the access token is not set
-        if (!$this->openIDConnectClient->getAccessToken()) {
-            return;
-        }
-
         $alg = $this->openIDConnectClient->getIdTokenHeader()->alg;
 
         $bit = match ($alg) {

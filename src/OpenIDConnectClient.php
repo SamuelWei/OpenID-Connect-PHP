@@ -638,7 +638,6 @@ class OpenIDConnectClient
                     new IssuedAtChecker(allowedTimeDrift: $this->getLeeway(), clock: $clock),
                     new ExpirationTimeChecker(allowedTimeDrift: $this->getLeeway(), clock: $clock),
                     new AudienceChecker(audience: $this->clientID),
-                    new AccessTokenHashChecker($this),
                     new IssuerChecker($this),
                     new EventsChecker('http://schemas.openid.net/event/backchannel-logout'),
                 ]
