@@ -1250,6 +1250,10 @@ class OpenIDConnectClient
                 throw new OpenIDConnectClientException('No support for signature type: ' . $alg);
         }
 
+        if ($jwk === null) {
+            throw new OpenIDConnectClientException('Unable to find JWK for algorithm: ' . $alg);
+        }
+
         return $jwsVerifier->verifyWithKey($jws, $jwk, 0);
     }
 
