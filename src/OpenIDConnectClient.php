@@ -715,7 +715,7 @@ class OpenIDConnectClient
     /**
      * @param $values object - example: (object) ['kid' => ..., 'nbf' => ..., 'use' => 'sig', 'kty' => "RSA", 'e' => "", 'n' => ""]
      */
-    protected function addAdditionalJwk(object $values): void
+    public function addAdditionalJwk(object $values): void
     {
         $key = JWKFactory::createFromValues((array) $values);
         $this->additionalJwks[] = $key;
