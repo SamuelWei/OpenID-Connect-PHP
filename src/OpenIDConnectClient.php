@@ -279,6 +279,11 @@ class OpenIDConnectClient
     private $backChannelSubject;
 
     /**
+     * @var string jti (JWT ID) of back-channel logout it will be stored here
+     */
+    private $backChannelJti;
+
+    /**
      * @var array list of supported auth methods
      */
     private $token_endpoint_auth_methods_supported = ['client_secret_basic'];
@@ -612,6 +617,23 @@ class OpenIDConnectClient
             // Verify Logout Token Claims
             if ($this->verifyLogoutTokenClaims($claims)) {
                 $this->verifiedClaims = $claims;
+
+                // Set the sid, which could be used to map to a session in
+                // the RP, and therefore be used to help destroy the RP's
+                // session.
+                if (isset($claims->sid)) {
+                    $this->backChannelSid = $claims->sid;
+                }
+
+                // Set the sub, which could be used to map to a session in
+                // the RP, and therefore be used to help destroy the RP's
+                // session.
+                if (isset($claims->sub)) {
+                    $this->backChannelSubject = $claims->sub;
+                }
+
+                $this->backChannelJti = $claims->jti;
+
                 return true;
             }
 
@@ -631,7 +653,6 @@ class OpenIDConnectClient
     public function verifyLogoutTokenClaims(object $claims): bool
     {
         try {
-
             $clock = new Clock();
             $claimCheckerManager = new ClaimCheckerManager(
                 [
@@ -657,19 +678,6 @@ class OpenIDConnectClient
         // Verify that the logout token contains a sub or sid, or both
         if (!isset($claims->sid) && !isset($claims->sub)) {
             return false;
-        }
-        // Set the sid, which could be used to map to a session in
-        // the RP, and therefore be used to help destroy the RP's
-        // session.
-        if (isset($claims->sid)) {
-            $this->backChannelSid = $claims->sid;
-        }
-
-        // Set the sub, which could be used to map to a session in
-        // the RP, and therefore be used to help destroy the RP's
-        // session.
-        if (isset($claims->sub)) {
-            $this->backChannelSubject = $claims->sub;
         }
 
         return true;
@@ -877,7 +885,6 @@ class OpenIDConnectClient
      */
     private function requestAuthorization()
     {
-
         $auth_endpoint = $this->getProviderConfigValue('authorization_endpoint');
         $response_type = 'code';
 
@@ -2192,6 +2199,11 @@ class OpenIDConnectClient
     public function getSubjectFromBackChannel(): string
     {
         return $this->backChannelSubject;
+    }
+
+    public function getJtiFromBackChannel(): string
+    {
+        return $this->backChannelJti;
     }
 
     public function supportsAuthMethod(string $auth_method, array $token_endpoint_auth_methods_supported): bool
