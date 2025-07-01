@@ -2,6 +2,9 @@
 
 use Jose\Component\Core\AlgorithmManager;
 use Jose\Component\Core\JWK;
+use Jose\Component\Encryption\Algorithm\ContentEncryption\A128CBCHS256;
+use Jose\Component\Encryption\Algorithm\KeyEncryption\RSAOAEP256;
+use Jose\Component\Encryption\JWEBuilder;
 use Jose\Component\KeyManagement\JWKFactory;
 use Jose\Component\Signature\Algorithm\EdDSA;
 use Jose\Component\Signature\Algorithm\ES256;
@@ -1630,6 +1633,164 @@ class OpenIDConnectClientTest extends TestCase
         $this->assertEquals($email, $userData->email);
     }
 
+    public function testRequestUserInfoUnsignedEncrypted()
+    {
+        // Create a new RSA key pair for signing the ID token
+        $private_key = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS256',
+                'use' => 'sig'
+            ]
+        );
+        $public_key = $private_key->toPublic();
+
+        // Create a new RSA key pair for encrypting the user info response
+        $encryption_key = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RSA-OAEP-256',
+                'use' => 'enc'
+            ]
+        );
+
+
+        // Generate random values for the ID token
+        $kid = bin2hex(random_bytes(6));
+        $code = bin2hex(random_bytes(6));
+        $nonce = bin2hex(random_bytes(6));
+        $state = bin2hex(random_bytes(6));
+        $firstName = $this->faker->firstName();
+        $lastName = $this->faker->lastName();
+        $email = $this->faker->email();
+        $sub = $this->faker->uuid();
+        $sid = $this->faker->uuid();
+
+        $accessToken = 'fake-access-token';
+
+        // Create claims for the ID token
+        $idTokenClaims = [
+            'exp' => time() + 60,
+            'iat' => time(),
+            'iss' => 'https://example.org',
+            'aud' => 'fake-client-id',
+            'sub' => $sub,
+            'sid' => $sid,
+            'nonce' => $nonce
+        ];
+
+        $userInfoClaims = [
+            'iss' => 'https://example.org',
+            'aud' => 'fake-client-id',
+            'sub' => $sub,
+            'given_name' => $firstName,
+            'family_name' => $lastName,
+            'email' => $email,
+        ];
+
+        // Create id token
+        $idToken = $this->signClaims($idTokenClaims, $private_key, 'RS256', ['kid' => $kid]);
+
+        // List of JWKs to be returned by the JWKS endpoint
+        $jwks = [[
+            'kid' => $kid,
+            ...$public_key->jsonSerialize()
+        ]];
+
+        $keyEncryptionAlgorithmManager = new AlgorithmManager([
+            new RSAOAEP256(),
+        ]);
+        $contentEncryptionAlgorithmManager = new AlgorithmManager([
+            new A128CBCHS256(),
+        ]);
+
+        $jweBuilder = new JWEBuilder(
+            $keyEncryptionAlgorithmManager,
+            $contentEncryptionAlgorithmManager,
+        );
+
+        $jwe = $jweBuilder
+            ->create()
+            ->withPayload(json_encode($userInfoClaims))
+            ->withSharedProtectedHeader([
+                'alg' => 'RSA-OAEP-256',
+                'enc' => 'A128CBC-HS256'
+            ])
+            ->addRecipient($encryption_key->toPublic())
+            ->build();
+
+        $serializer = new \Jose\Component\Encryption\Serializer\CompactSerializer();
+
+        $userInfoResponse = $serializer->serialize($jwe, 0);
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL', 'handleJweResponse'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function (string$url, ?string $post_body = null, array $headers = []) use ($userInfoResponse, $accessToken, $jwks, $client) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/jwks':
+                        return new Response(200, 'application/json', json_encode([
+                            'keys' => $jwks
+                        ]));
+                    case 'https://example.org/userinfo':
+                        $this->assertEquals('Authorization: Bearer '.$accessToken, $headers[0]);
+                        return new Response(200, 'application/jwt', $userInfoResponse);
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        $client->expects($this->any())
+            ->method('handleJweResponse')
+            ->with($this->anything())
+            ->will(
+                $this->returnCallback(function (string $jwe) use ($userInfoClaims, $userInfoResponse) {
+                    $this->assertEquals($userInfoResponse, $jwe);
+                    return json_encode($userInfoClaims);
+                })
+            );
+
+        // Simulate the state and nonce have been set in the session
+        $_SESSION['openid_connect_state'] = $state;
+        $_SESSION['openid_connect_nonce'] = $nonce;
+
+        // Simulate incoming request with code and state
+        $_REQUEST['code'] = $code;
+        $_REQUEST['state'] = $state;
+
+        $client->setAccessToken($accessToken);
+        $client->setIdToken($idToken);
+
+        // Get user info
+        $userData = $client->requestUserInfo();
+
+        // Verify call claims are correctly retrieved
+        $this->assertEquals($firstName, $userData->given_name);
+        $this->assertEquals($lastName, $userData->family_name);
+        $this->assertEquals($email, $userData->email);
+    }
+
     public function testRequestUserInfoSignedUnencrypted()
     {
         // Create a new RSA key pair for signing the ID token
@@ -1743,4 +1904,168 @@ class OpenIDConnectClientTest extends TestCase
         $this->assertEquals($lastName, $userData->family_name);
         $this->assertEquals($email, $userData->email);
     }
+
+    public function testRequestUserInfoSignedEncrypted()
+    {
+        // Create a new RSA key pair for signing the ID token
+        $private_key = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS256',
+                'use' => 'sig'
+            ]
+        );
+        $public_key = $private_key->toPublic();
+
+        // Create a new RSA key pair for encrypting the user info response
+        $encryption_key = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RSA-OAEP-256',
+                'use' => 'enc'
+            ]
+        );
+
+
+        // Generate random values for the ID token
+        $kid = bin2hex(random_bytes(6));
+        $code = bin2hex(random_bytes(6));
+        $nonce = bin2hex(random_bytes(6));
+        $state = bin2hex(random_bytes(6));
+        $firstName = $this->faker->firstName();
+        $lastName = $this->faker->lastName();
+        $email = $this->faker->email();
+        $sub = $this->faker->uuid();
+        $sid = $this->faker->uuid();
+
+        $accessToken = 'fake-access-token';
+
+        // Create claims for the ID token
+        $idTokenClaims = [
+            'exp' => time() + 60,
+            'iat' => time(),
+            'iss' => 'https://example.org',
+            'aud' => 'fake-client-id',
+            'sub' => $sub,
+            'sid' => $sid,
+            'nonce' => $nonce
+        ];
+
+        $userInfoClaims = [
+            'iss' => 'https://example.org',
+            'aud' => 'fake-client-id',
+            'sub' => $sub,
+            'given_name' => $firstName,
+            'family_name' => $lastName,
+            'email' => $email,
+        ];
+
+        // Create id token
+        $idToken = $this->signClaims($idTokenClaims, $private_key, 'RS256', ['kid' => $kid]);
+
+        // List of JWKs to be returned by the JWKS endpoint
+        $jwks = [[
+            'kid' => $kid,
+            ...$public_key->jsonSerialize()
+        ]];
+
+
+        $keyEncryptionAlgorithmManager = new AlgorithmManager([
+            new RSAOAEP256(),
+        ]);
+        $contentEncryptionAlgorithmManager = new AlgorithmManager([
+            new A128CBCHS256(),
+        ]);
+
+        $jweBuilder = new JWEBuilder(
+            $keyEncryptionAlgorithmManager,
+            $contentEncryptionAlgorithmManager,
+        );
+
+        $jws = $this->signClaims($userInfoClaims, $private_key, 'RS256', ['kid' => $kid]);
+
+        $jwe = $jweBuilder
+            ->create()
+            ->withPayload($jws)
+            ->withSharedProtectedHeader([
+                'alg' => 'RSA-OAEP-256',
+                'enc' => 'A128CBC-HS256',
+                'cty' => 'JWT',
+            ])
+            ->addRecipient($encryption_key->toPublic())
+            ->build();
+
+        $serializer = new \Jose\Component\Encryption\Serializer\CompactSerializer();
+
+        $userInfoResponse = $serializer->serialize($jwe, 0);
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL', 'handleJweResponse'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function (string$url, ?string $post_body = null, array $headers = []) use ($userInfoResponse, $accessToken, $jwks, $client) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/jwks':
+                        return new Response(200, 'application/json', json_encode([
+                            'keys' => $jwks
+                        ]));
+                    case 'https://example.org/userinfo':
+                        $this->assertEquals('Authorization: Bearer '.$accessToken, $headers[0]);
+                        return new Response(200, 'application/jwt', $userInfoResponse);
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        $client->expects($this->any())
+            ->method('handleJweResponse')
+            ->with($this->anything())
+            ->will(
+                $this->returnCallback(function (string $jwe) use ($jws, $userInfoResponse) {
+                    $this->assertEquals($userInfoResponse, $jwe);
+                    return $jws;
+                })
+            );
+
+        // Simulate the state and nonce have been set in the session
+        $_SESSION['openid_connect_state'] = $state;
+        $_SESSION['openid_connect_nonce'] = $nonce;
+
+        // Simulate incoming request with code and state
+        $_REQUEST['code'] = $code;
+        $_REQUEST['state'] = $state;
+
+        $client->setAccessToken($accessToken);
+        $client->setIdToken($idToken);
+
+        // Get user info
+        $userData = $client->requestUserInfo();
+
+        // Verify call claims are correctly retrieved
+        $this->assertEquals($firstName, $userData->given_name);
+        $this->assertEquals($lastName, $userData->family_name);
+        $this->assertEquals($email, $userData->email);
+    }
+
+
 }
