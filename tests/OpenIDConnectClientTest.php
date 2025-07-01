@@ -1557,6 +1557,61 @@ class OpenIDConnectClientTest extends TestCase
         $this->assertEquals($idToken, $client->getIdToken());
     }
 
+    public function testAuthenticateImplicitFlowRejectedWithInvalidState()
+    {
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = new OpenIDConnectClient(
+            'https://example.org',
+            'fake-client-id',
+            'fake-client-secret',
+        );
+
+        // Allow implicit flow
+        $client->setAllowImplicitFlow(true);
+
+        $state = bin2hex(random_bytes(6));
+        $nonce = bin2hex(random_bytes(6));
+
+        // Simulate the state and nonce have been set in the session
+        $_SESSION['openid_connect_state'] = $state;
+        $_SESSION['openid_connect_nonce'] = $nonce;
+
+        // Simulate incoming request with ID token and wrong state
+        $_REQUEST['id_token'] = bin2hex(random_bytes(6));
+        $_REQUEST['state'] = "other state";
+
+        // Call the authenticate method, should throw an exception
+        $this->expectException(OpenIDConnectClientException::class);
+        $client->authenticate();
+    }
+
+    public function testAuthenticateImplicitFlowRejectedWithNoState()
+    {
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = new OpenIDConnectClient(
+            'https://example.org',
+            'fake-client-id',
+            'fake-client-secret',
+        );
+
+        // Allow implicit flow
+        $client->setAllowImplicitFlow(true);
+
+        $state = bin2hex(random_bytes(6));
+        $nonce = bin2hex(random_bytes(6));
+
+        // Simulate the state and nonce have been set in the session
+        $_SESSION['openid_connect_state'] = $state;
+        $_SESSION['openid_connect_nonce'] = $nonce;
+
+        // Simulate incoming request with ID token and without state
+        $_REQUEST['id_token'] = bin2hex(random_bytes(6));
+
+        // Call the authenticate method, should throw an exception
+        $this->expectException(OpenIDConnectClientException::class);
+        $client->authenticate();
+    }
+
     public function testAuthenticateAuthorizationCodeFlow()
     {
         // Create a new RSA key pair for signing the ID token
@@ -1829,6 +1884,55 @@ class OpenIDConnectClientTest extends TestCase
 
         // Check if the ID token is set
         $this->assertEquals($idToken, $client->getIdToken());
+    }
+
+    public function testAuthenticateImplicitAuthorizationCodeFlowWithInvalidState()
+    {
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = new OpenIDConnectClient(
+            'https://example.org',
+            'fake-client-id',
+            'fake-client-secret',
+        );
+
+        $state = bin2hex(random_bytes(6));
+        $nonce = bin2hex(random_bytes(6));
+
+        // Simulate the state and nonce have been set in the session
+        $_SESSION['openid_connect_state'] = $state;
+        $_SESSION['openid_connect_nonce'] = $nonce;
+
+        // Simulate incoming request with code and wrong state
+        $_REQUEST['code'] = bin2hex(random_bytes(6));
+        $_REQUEST['state'] = "other state";
+
+        // Call the authenticate method, should throw an exception
+        $this->expectException(OpenIDConnectClientException::class);
+        $client->authenticate();
+    }
+
+    public function testAuthenticateAuthorizationCodeFlowWithNoState()
+    {
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = new OpenIDConnectClient(
+            'https://example.org',
+            'fake-client-id',
+            'fake-client-secret',
+        );
+
+        $state = bin2hex(random_bytes(6));
+        $nonce = bin2hex(random_bytes(6));
+
+        // Simulate the state and nonce have been set in the session
+        $_SESSION['openid_connect_state'] = $state;
+        $_SESSION['openid_connect_nonce'] = $nonce;
+
+        // Simulate incoming request with code and without state
+        $_REQUEST['code'] = bin2hex(random_bytes(6));
+
+        // Call the authenticate method, should throw an exception
+        $this->expectException(OpenIDConnectClientException::class);
+        $client->authenticate();
     }
 
     public function testRequestUserInfoUnsignedUnencrypted()
