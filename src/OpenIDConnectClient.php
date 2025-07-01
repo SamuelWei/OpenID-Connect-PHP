@@ -451,19 +451,18 @@ class OpenIDConnectClient
             // Get claims from JWT
             $claims = json_decode($jws->getPayload());
 
-            if ($this->verifyIdTokenClaims($claims)) {
-
-                // Clean up the session a little
-                $this->unsetNonce();
-
-                // Save the verified claims
-                $this->verifiedClaims = $claims;
-
-                // Success!
-                return true;
+            if (!$this->verifyIdTokenClaims($claims)) {
+                throw new OpenIDConnectClientException('Unable to verify JWT claims');
             }
 
-            throw new OpenIDConnectClientException('Unable to verify JWT claims');
+            // Clean up the session a little
+            $this->unsetNonce();
+
+            // Save the verified claims
+            $this->verifiedClaims = $claims;
+
+            // Success!
+            return true;
         }
 
         if ($this->allowImplicitFlow && isset($_REQUEST['id_token'])) {
@@ -506,19 +505,17 @@ class OpenIDConnectClient
             // Get claims from JWT
             $claims = json_decode($jws->getPayload());
 
-            if ($this->verifyIdTokenClaims($claims)) {
-
-                $this->unsetNonce();
-
-                // Save the verified claims
-                $this->verifiedClaims = $claims;
-
-                // Success!
-                return true;
+            if (!$this->verifyIdTokenClaims($claims)) {
+                throw new OpenIDConnectClientException('Unable to verify JWT claims');
             }
 
+            $this->unsetNonce();
 
-            throw new OpenIDConnectClientException('Unable to verify JWT claims');
+            // Save the verified claims
+            $this->verifiedClaims = $claims;
+
+            // Success!
+            return true;
         }
 
         $this->requestAuthorization();
@@ -596,54 +593,55 @@ class OpenIDConnectClient
      */
     public function verifyLogoutToken(): bool
     {
-        if (isset($_REQUEST['logout_token'])) {
-            $logout_token = $_REQUEST['logout_token'];
+        // Check if the logout token is present in the request
+        if (!isset($_REQUEST['logout_token'])) {
+            throw new OpenIDConnectClientException('Back-channel logout: There was no logout_token in the request');
+        }
 
-            $logoutTokenHeaders = $this->decodeJWT($logout_token);
+        $logout_token = $_REQUEST['logout_token'];
 
-            if (isset($logoutTokenHeaders->enc)) {
-                // Handle JWE
-                $logout_token = $this->handleJweResponse($logout_token);
-            }
+        $logoutTokenHeaders = $this->decodeJWT($logout_token);
 
-            $jws = $this->jwsSerializerManager->unserialize($logout_token);
+        if (isset($logoutTokenHeaders->enc)) {
+            // Handle JWE
+            $logout_token = $this->handleJweResponse($logout_token);
+        }
 
-            // Verify header
-            $this->headerCheckerManager->check($jws, 0, ['alg']);
+        $jws = $this->jwsSerializerManager->unserialize($logout_token);
 
-            // Verify the signature
-            $this->verifySignatures($jws);
+        // Verify header
+        $this->headerCheckerManager->check($jws, 0, ['alg']);
 
-            // Get claims from JWT
-            $claims = json_decode($jws->getPayload());
+        // Verify the signature
+        $this->verifySignatures($jws);
 
-            // Verify Logout Token Claims
-            if ($this->verifyLogoutTokenClaims($claims)) {
-                $this->verifiedClaims = $claims;
+        // Get claims from JWT
+        $claims = json_decode($jws->getPayload());
 
-                // Set the sid, which could be used to map to a session in
-                // the RP, and therefore be used to help destroy the RP's
-                // session.
-                if (isset($claims->sid)) {
-                    $this->backChannelSid = $claims->sid;
-                }
-
-                // Set the sub, which could be used to map to a session in
-                // the RP, and therefore be used to help destroy the RP's
-                // session.
-                if (isset($claims->sub)) {
-                    $this->backChannelSubject = $claims->sub;
-                }
-
-                $this->backChannelJti = $claims->jti;
-
-                return true;
-            }
-
+        // Verify Logout Token Claims
+        if (!$this->verifyLogoutTokenClaims($claims)) {
             return false;
         }
 
-        throw new OpenIDConnectClientException('Back-channel logout: There was no logout_token in the request');
+        $this->verifiedClaims = $claims;
+
+        // Set the sid, which could be used to map to a session in
+        // the RP, and therefore be used to help destroy the RP's
+        // session.
+        if (isset($claims->sid)) {
+            $this->backChannelSid = $claims->sid;
+        }
+
+        // Set the sub, which could be used to map to a session in
+        // the RP, and therefore be used to help destroy the RP's
+        // session.
+        if (isset($claims->sub)) {
+            $this->backChannelSubject = $claims->sub;
+        }
+
+        $this->backChannelJti = $claims->jti;
+
+        return true;
     }
 
     /**
