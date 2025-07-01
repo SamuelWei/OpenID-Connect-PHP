@@ -385,6 +385,16 @@ class OpenIDConnectClient
         if (isset($_REQUEST['code'])) {
 
             $code = $_REQUEST['code'];
+
+            // Do an OpenID Connect session check
+            if (!isset($_REQUEST['state']) || ($_REQUEST['state'] !== $this->getState())) {
+                throw new OpenIDConnectClientException('Unable to determine state');
+            }
+
+            // Cleanup state
+            $this->unsetState();
+
+            // Request token from the server using the code
             $token_json = $this->requestTokens($code);
 
             // Throw an error if the server returns one
@@ -394,14 +404,6 @@ class OpenIDConnectClient
                 }
                 throw new OpenIDConnectClientException('Got response: ' . $token_json->error);
             }
-
-            // Do an OpenID Connect session check
-            if (!isset($_REQUEST['state']) || ($_REQUEST['state'] !== $this->getState())) {
-                throw new OpenIDConnectClientException('Unable to determine state');
-            }
-
-            // Cleanup state
-            $this->unsetState();
 
             if (!property_exists($token_json, 'id_token')) {
                 throw new OpenIDConnectClientException('User did not authorize openid scope.');
