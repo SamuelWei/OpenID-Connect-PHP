@@ -341,7 +341,6 @@ class OpenIDConnectClient
             ],
             [
                 $jwsTokenSupport
-                //new JWETokenSupport(), // Currently not supported in this library
             ]
         );
     }
@@ -418,17 +417,17 @@ class OpenIDConnectClient
 
             $id_token = $token_json->id_token;
 
-            $jws = $this->jwsSerializerManager->unserialize($id_token);
+            $idTokenHeaders = $this->decodeJWT($id_token);
 
-
-            if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
-                // Handle JWE; Throw exception as JWE is not supported in this library
-                // @TODO: What should we do with the result?
-                $this->handleJweResponse($id_token);
+            if (isset($idTokenHeaders->enc)) {
+                // Handle JWE
+                $id_token = $this->handleJweResponse($id_token);
             }
 
+            $jws = $this->jwsSerializerManager->unserialize($id_token);
+
             // Verify header
-            $this->headerCheckerManager->check($jws, 0);
+            $this->headerCheckerManager->check($jws, 0, ['alg']);
 
             // Verify the signature
             $this->verifySignatures($jws);
@@ -479,16 +478,17 @@ class OpenIDConnectClient
             // Cleanup state
             $this->unsetState();
 
-            $jws = $this->jwsSerializerManager->unserialize($id_token);
+            $idTokenHeaders = $this->decodeJWT($id_token);
 
-            if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
-                // Handle JWE; Throw exception as JWE is not supported in this library
-                // @TODO: What should we do with the result?
-                $this->handleJweResponse($id_token);
+            if (isset($idTokenHeaders->enc)) {
+                // Handle JWE
+                $id_token = $this->handleJweResponse($id_token);
             }
 
+            $jws = $this->jwsSerializerManager->unserialize($id_token);
+
             // Verify header
-            $this->headerCheckerManager->check($jws, 0);
+            $this->headerCheckerManager->check($jws, 0, ['alg']);
 
             // Verify the signature
             $this->verifySignatures($jws);
@@ -597,16 +597,17 @@ class OpenIDConnectClient
         if (isset($_REQUEST['logout_token'])) {
             $logout_token = $_REQUEST['logout_token'];
 
-            $jws = $this->jwsSerializerManager->unserialize($logout_token);
+            $logoutTokenHeaders = $this->decodeJWT($logout_token);
 
-            if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
-                // Handle JWE; Throw exception as JWE is not supported in this library
-                // @TODO: What should we do with the result?
-                $this->handleJweResponse($logout_token);
+            if (isset($logoutTokenHeaders->enc)) {
+                // Handle JWE
+                $logout_token = $this->handleJweResponse($logout_token);
             }
 
+            $jws = $this->jwsSerializerManager->unserialize($logout_token);
+
             // Verify header
-            $this->headerCheckerManager->check($jws, 0);
+            $this->headerCheckerManager->check($jws, 0, ['alg']);
 
             // Verify the signature
             $this->verifySignatures($jws);
@@ -1331,6 +1332,21 @@ class OpenIDConnectClient
             throw new OpenIDConnectClientException('The communication to retrieve user data has failed with status code '.$response->getStatus());
         }
 
+        $userInfo = $this->getClaimsFromUserInfoResponse($response);
+
+        if ($attribute === null) {
+            return $userInfo;
+        }
+
+        if (property_exists($userInfo, $attribute)) {
+            return $userInfo->$attribute;
+        }
+
+        return null;
+    }
+
+    private function getClaimsFromUserInfoResponse(Response $response)
+    {
         // When we receive application/jwt, the UserInfo Response is signed and/or encrypted.
 
         /*
@@ -1347,68 +1363,83 @@ class OpenIDConnectClient
 
         if ($contentType === 'application/jwt') {
 
-            $jws = $this->jwsSerializerManager->unserialize($response->getBody());
+            $jwt = $response->getBody();
 
-            if ($jws->getSignature(0)->hasProtectedHeaderParameter('enc')) {
-                // Handle JWE; Throw exception as JWE is not supported in this library
-                // @TODO: What should be done with the return value?
-                $this->handleJweResponse($response->getBody());
+            $headers = $this->decodeJWT($jwt);
+
+            if (isset($headers->enc)) {
+                // Handle JWE
+                $content = $this->handleJweResponse($jwt);
+
+                // If nested JWT, header will contain cty
+                // See RFC 7519 Section 5.2
+                if (isset($headers->cty) && $headers->cty === 'JWT') {
+                    $jwt = $content;
+                } else {
+                    // If not nested JWT, return the content as is
+                    return $this->getClaimsFromUnsignedUserInfoResponse($content);
+                }
             }
 
-            // Verify header
-            $this->headerCheckerManager->check($jws, 0);
+            $jws = $this->jwsSerializerManager->unserialize($jwt);
 
-            // Verify the signature
-            $this->verifySignatures($jws);
+            return $this->getClaimsFromSignedUserInfoResponse($jws);
 
-            // Get claims from JWT
-            $claims = json_decode($jws->getPayload());
-
-            /*
-             * The sub (subject) Claim MUST always be returned in the UserInfo Response.
-             * NOTE: Due to the possibility of token substitution attacks (see Section 16.11), the UserInfo Response is not guaranteed to be about the End-User identified by the sub (subject) element of the ID Token.
-             * The sub Claim in the UserInfo Response MUST be verified to exactly match the sub Claim in the ID Token; if they do not match, the UserInfo Response values MUST NOT be used.
-             *
-             * If signed, the UserInfo Response MUST contain the Claims iss (issuer) and aud (audience) as members.
-             * The iss value MUST be the OP's Issuer Identifier URL. The aud value MUST be or include the RP's Client ID value.
-            */
-
-            (new ClaimCheckerManager(
-                [
-                    new AudienceChecker($this->clientID),
-                    new IssuerChecker($this),
-                    new IsEqualChecker('sub', $this->getIdTokenPayload()->sub),
-                ]
-            ))->check((array) $claims, ['sub', 'aud', 'iss']);
         } else {
-            $claims = json_decode($response->getBody());
-
-            /*
-             * The sub (subject) Claim MUST always be returned in the UserInfo Response.
-             * NOTE: Due to the possibility of token substitution attacks (see Section 16.11), the UserInfo Response is not guaranteed to be about the End-User identified by the sub (subject) element of the ID Token.
-             * The sub Claim in the UserInfo Response MUST be verified to exactly match the sub Claim in the ID Token; if they do not match, the UserInfo Response values MUST NOT be used.
-             */
-
-            (new ClaimCheckerManager(
-                [
-                    new IsEqualChecker('sub', $this->getIdTokenPayload()->sub),
-                ]
-            ))->check((array) $claims, ['sub']);
+            return $this->getClaimsFromUnsignedUserInfoResponse($response->getBody());
         }
-
-
-        $userInfo = $claims;
-
-        if ($attribute === null) {
-            return $userInfo;
-        }
-
-        if (property_exists($userInfo, $attribute)) {
-            return $userInfo->$attribute;
-        }
-
-        return null;
     }
+
+    private function getClaimsFromUnsignedUserInfoResponse($content)
+    {
+        $claims = json_decode($content);
+
+        /*
+         * The sub (subject) Claim MUST always be returned in the UserInfo Response.
+         * NOTE: Due to the possibility of token substitution attacks (see Section 16.11), the UserInfo Response is not guaranteed to be about the End-User identified by the sub (subject) element of the ID Token.
+         * The sub Claim in the UserInfo Response MUST be verified to exactly match the sub Claim in the ID Token; if they do not match, the UserInfo Response values MUST NOT be used.
+         */
+
+        (new ClaimCheckerManager(
+            [
+                new IsEqualChecker('sub', $this->getIdTokenPayload()->sub),
+            ]
+        ))->check((array) $claims, ['sub']);
+
+        return $claims;
+    }
+
+    private function getClaimsFromSignedUserInfoResponse(JWS $jws)
+    {
+        // Verify header
+        $this->headerCheckerManager->check($jws, 0, ['alg']);
+
+        // Verify the signature
+        $this->verifySignatures($jws);
+
+        // Get claims from JWT
+        $claims = json_decode($jws->getPayload());
+
+        /*
+         * The sub (subject) Claim MUST always be returned in the UserInfo Response.
+         * NOTE: Due to the possibility of token substitution attacks (see Section 16.11), the UserInfo Response is not guaranteed to be about the End-User identified by the sub (subject) element of the ID Token.
+         * The sub Claim in the UserInfo Response MUST be verified to exactly match the sub Claim in the ID Token; if they do not match, the UserInfo Response values MUST NOT be used.
+         *
+         * If signed, the UserInfo Response MUST contain the Claims iss (issuer) and aud (audience) as members.
+         * The iss value MUST be the OP's Issuer Identifier URL. The aud value MUST be or include the RP's Client ID value.
+        */
+
+        (new ClaimCheckerManager(
+            [
+                new AudienceChecker($this->clientID),
+                new IssuerChecker($this),
+                new IsEqualChecker('sub', $this->getIdTokenPayload()->sub),
+            ]
+        ))->check((array) $claims, ['sub', 'aud', 'iss']);
+
+        return $claims;
+    }
+
 
     /**
      *
