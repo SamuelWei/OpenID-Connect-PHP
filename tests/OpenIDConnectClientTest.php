@@ -2471,5 +2471,311 @@ class OpenIDConnectClientTest extends TestCase
         $this->assertEquals($email, $userData->email);
     }
 
+    public function testVerifyLogoutTokenThrowsExceptionWithoutToken()
+    {
+        $client = new OpenIDConnectClient(
+            'https://example.org',
+            'fake-client-id',
+            'fake-client-secret',
+        );
+
+        // Call the verifyLogoutToken method without a token
+        $this->expectException(OpenIDConnectClientException::class);
+        $client->verifyLogoutToken();
+    }
+
+    public function testVerifyLogoutTokenFailsWithInvalidClaims()
+    {
+        // Create a new RSA key pair for signing the logout token
+        $private_key = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS256',
+                'use' => 'sig'
+            ]
+        );
+        $public_key = $private_key->toPublic();
+
+        // Generate random values for the logout token
+        $kid = bin2hex(random_bytes(6));
+        $jti = bin2hex(random_bytes(6));
+
+        // Create claims for the logout token
+        // Missing 'sub' and 'sid' claims
+        $claims = [
+            'exp' => time() + 60,
+            'iat' => time(),
+            'iss' => 'https://example.org',
+            'aud' => 'fake-client-id',
+            'jti' => $jti,
+            'events' => json_decode('{"http://schemas.openid.net/event/backchannel-logout": {}}')
+        ];
+
+        // Create logout token
+        $logoutToken = $this->signClaims($claims, $private_key, 'RS256', ['kid' => $kid]);
+
+        // List of JWKs to be returned by the JWKS endpoint
+        $jwks = [[
+            'kid' => $kid,
+            ...$public_key->jsonSerialize()
+        ]];
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function (string$url, ?string $post_body = null, array $headers = []) use ($jwks) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/jwks':
+                        return new Response(200, 'application/json', json_encode([
+                            'keys' => $jwks
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+
+        // Call the verifyLogoutToken
+        $_REQUEST['logout_token'] = $logoutToken;
+        $this->assertFalse($client->verifyLogoutToken());
+    }
+
+    public function testVerifyLogoutTokenSigned()
+    {
+        // Create a new RSA key pair for signing the logout token
+        $private_key = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS256',
+                'use' => 'sig'
+            ]
+        );
+        $public_key = $private_key->toPublic();
+
+        // Generate random values for the logout token
+        $kid = bin2hex(random_bytes(6));
+        $jti = bin2hex(random_bytes(6));
+        $sub = $this->faker->uuid();
+        $sid = $this->faker->uuid();
+
+        // Create claims for the logout token
+        $claims = [
+            'exp' => time() + 60,
+            'iat' => time(),
+            'iss' => 'https://example.org',
+            'aud' => 'fake-client-id',
+            'sub' => $sub,
+            'sid' => $sid,
+            'jti' => $jti,
+            'events' => json_decode('{"http://schemas.openid.net/event/backchannel-logout": {}}')
+        ];
+
+        // Create logout token
+        $logoutToken = $this->signClaims($claims, $private_key, 'RS256', ['kid' => $kid]);
+
+        // List of JWKs to be returned by the JWKS endpoint
+        $jwks = [[
+            'kid' => $kid,
+            ...$public_key->jsonSerialize()
+        ]];
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function (string$url, ?string $post_body = null, array $headers = []) use ($jwks) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/jwks':
+                        return new Response(200, 'application/json', json_encode([
+                            'keys' => $jwks
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+
+        // Call the verifyLogoutToken
+        $_REQUEST['logout_token'] = $logoutToken;
+        $this->assertTrue($client->verifyLogoutToken());
+
+        // Get claims
+        $this->assertEquals($sub, $client->getVerifiedClaims('sub'));
+        $this->assertEquals($sid, $client->getVerifiedClaims('sid'));
+        $this->assertEquals($jti, $client->getVerifiedClaims('jti'));
+        $this->assertEquals('https://example.org', $client->getVerifiedClaims('iss'));
+
+        // Get sid
+        $this->assertEquals($sid, $client->getSidFromBackChannel());
+
+        // Get sub
+        $this->assertEquals($sub, $client->getSubjectFromBackChannel());
+
+        // Get jti
+        $this->assertEquals($jti, $client->getJtiFromBackChannel());
+    }
+    public function testVerifyLogoutTokenSignedEncrypted()
+    {
+        // Create a new RSA key pair for signing the logout token
+        $private_key = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RS256',
+                'use' => 'sig'
+            ]
+        );
+        $public_key = $private_key->toPublic();
+
+        // Create a new RSA key pair for encrypting the user info response
+        $encryption_key = JWKFactory::createRSAKey(
+            4096,
+            [
+                'alg' => 'RSA-OAEP-256',
+                'use' => 'enc'
+            ]
+        );
+
+        // Generate random values for the logout token
+        $kid = bin2hex(random_bytes(6));
+        $jti = bin2hex(random_bytes(6));
+        $sub = $this->faker->uuid();
+        $sid = $this->faker->uuid();
+
+        // Create claims for the logout token
+        $claims = [
+            'exp' => time() + 60,
+            'iat' => time(),
+            'iss' => 'https://example.org',
+            'aud' => 'fake-client-id',
+            'sub' => $sub,
+            'sid' => $sid,
+            'jti' => $jti,
+            'events' => json_decode('{"http://schemas.openid.net/event/backchannel-logout": {}}')
+        ];
+
+        // Create logout token
+        $logoutToken = $this->signClaims($claims, $private_key, 'RS256', ['kid' => $kid]);
+
+        $keyEncryptionAlgorithmManager = new AlgorithmManager([
+            new RSAOAEP256(),
+        ]);
+        $contentEncryptionAlgorithmManager = new AlgorithmManager([
+            new A128CBCHS256(),
+        ]);
+
+        $jweBuilder = new JWEBuilder(
+            $keyEncryptionAlgorithmManager,
+            $contentEncryptionAlgorithmManager,
+        );
+
+        $jwe = $jweBuilder
+            ->create()
+            ->withPayload($logoutToken)
+            ->withSharedProtectedHeader([
+                'alg' => 'RSA-OAEP-256',
+                'enc' => 'A128CBC-HS256',
+                'cty' => 'JWT',
+            ])
+            ->addRecipient($encryption_key->toPublic())
+            ->build();
+
+        $serializer = new \Jose\Component\Encryption\Serializer\CompactSerializer();
+
+        $encryptedLogoutToken = $serializer->serialize($jwe, 0);
+
+
+        // List of JWKs to be returned by the JWKS endpoint
+        $jwks = [[
+            'kid' => $kid,
+            ...$public_key->jsonSerialize()
+        ]];
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL', 'handleJweResponse'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function (string$url, ?string $post_body = null, array $headers = []) use ($jwks) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/jwks':
+                        return new Response(200, 'application/json', json_encode([
+                            'keys' => $jwks
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        $client->expects($this->any())
+            ->method('handleJweResponse')
+            ->with($encryptedLogoutToken)
+            ->willReturn($logoutToken);
+
+
+        // Call the verifyLogoutToken
+        $_REQUEST['logout_token'] = $encryptedLogoutToken;
+        $this->assertTrue($client->verifyLogoutToken());
+    }
+
 
 }
