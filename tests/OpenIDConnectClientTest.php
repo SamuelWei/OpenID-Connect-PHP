@@ -42,7 +42,7 @@ class OpenIDConnectClientTest extends TestCase
     }
 
     /**
-     * @covers       Jumbojett\\OpenIDConnectClient::verifyIdTokenClaims
+     * @covers       Jumbojett\OpenIDConnectClient::verifyIdTokenClaims
      * @dataProvider provideTestVerifyIdTokenClaimsData
      * @return void
      */
@@ -325,9 +325,8 @@ class OpenIDConnectClientTest extends TestCase
     }
 
     /**
-     * @covers       Jumbojett\\OpenIDConnectClient::verifyLogoutTokenClaims
+     * @covers       Jumbojett\OpenIDConnectClient::verifyLogoutTokenClaims
      * @dataProvider provideTestVerifyLogoutTokenClaimsData
-     * @throws OpenIDConnectClientException
      */
     public function testVerifyLogoutTokenClaims($claims, $expectedResult)
     {
@@ -1937,6 +1936,94 @@ class OpenIDConnectClientTest extends TestCase
 
         // Call the authenticate method, should throw an exception
         $this->expectException(OpenIDConnectClientException::class);
+        $client->authenticate();
+    }
+
+    public function testAuthenticateAuthorizationCodeWithError()
+    {
+        // Generate random values for the ID token
+        $code = bin2hex(random_bytes(6));
+        $nonce = bin2hex(random_bytes(6));
+        $state = bin2hex(random_bytes(6));
+
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function (string$url, ?string $post_body = null, array $headers = []) use ($code) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    case 'https://example.org/token':
+                        return new Response(200, 'application/json', json_encode([
+                            'error' => 'invalid_request',
+                            'error_description' => 'Example description'
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        // Simulate the state and nonce have been set in the session
+        $_SESSION['openid_connect_state'] = $state;
+        $_SESSION['openid_connect_nonce'] = $nonce;
+
+        // Simulate incoming request with code and state
+        $_REQUEST['code'] = $code;
+        $_REQUEST['state'] = $state;
+
+        // Call the authenticate method, should throw an exception
+        $this->expectException(OpenIDConnectClientException::class);
+        $this->expectExceptionMessage('Error: invalid_request Description: Example description');
+        $client->authenticate();
+    }
+
+    public function testAuthenticateThrowsExceptionOnError()
+    {
+        $client = new OpenIDConnectClient(
+            'https://example.org',
+            'fake-client-id',
+            'fake-client-secret',
+        );
+
+        $_REQUEST['error'] = 'invalid_request';
+
+        $this->expectException(OpenIDConnectClientException::class);
+        $this->expectExceptionMessage('Error: invalid_request');
+        $client->authenticate();
+    }
+
+    public function testAuthenticateThrowsExceptionOnErrorWithDescription()
+    {
+        $client = new OpenIDConnectClient(
+            'https://example.org',
+            'fake-client-id',
+            'fake-client-secret',
+        );
+
+        $_REQUEST['error'] = 'invalid_request';
+        $_REQUEST['error_description'] = 'Unsupported response_type value';
+
+        $this->expectException(OpenIDConnectClientException::class);
+        $this->expectExceptionMessage('Error: invalid_request Description: Unsupported response_type value');
         $client->authenticate();
     }
 

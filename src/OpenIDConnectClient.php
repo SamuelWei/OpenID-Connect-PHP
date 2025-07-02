@@ -400,10 +400,8 @@ class OpenIDConnectClient
 
             // Throw an error if the server returns one
             if (isset($token_json->error)) {
-                if (isset($token_json->error_description)) {
-                    throw new OpenIDConnectClientException($token_json->error_description);
-                }
-                throw new OpenIDConnectClientException('Got response: ' . $token_json->error);
+                $desc = isset($token_json->error_description) ? ' Description: ' . $token_json->error_description : '';
+                throw new OpenIDConnectClientException('Error: ' . $token_json->error .$desc);
             }
 
             if (!property_exists($token_json, 'id_token')) {
