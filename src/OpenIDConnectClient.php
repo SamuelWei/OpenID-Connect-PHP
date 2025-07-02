@@ -57,6 +57,7 @@ use Jose\Component\Signature\JWSVerifier;
 use Jose\Component\Signature\Serializer\CompactSerializer;
 use Jose\Component\Signature\Serializer\JWSSerializerManager;
 use Symfony\Component\Clock\Clock;
+use Throwable;
 
 use function bin2hex;
 use function is_object;
@@ -426,10 +427,10 @@ class OpenIDConnectClient
                 $id_token = $this->handleJweResponse($id_token);
             }
 
-            $jws = $this->jwsSerializerManager->unserialize($id_token);
+            $jws = $this->unserializeJWS($id_token);
 
             // Verify header
-            $this->headerCheckerManager->check($jws, 0, ['alg']);
+            $this->verifyJWSHeader($jws);
 
             // Verify the signature
             $this->verifySignatures($jws);
@@ -449,7 +450,7 @@ class OpenIDConnectClient
             $this->tokenResponse = $token_json;
 
             // Get claims from JWT
-            $claims = json_decode($jws->getPayload());
+            $claims = $this->getJWSClaims($jws);
 
             if (!$this->verifyIdTokenClaims($claims)) {
                 throw new OpenIDConnectClientException('Unable to verify JWT claims');
@@ -486,10 +487,10 @@ class OpenIDConnectClient
                 $id_token = $this->handleJweResponse($id_token);
             }
 
-            $jws = $this->jwsSerializerManager->unserialize($id_token);
+            $jws = $this->unserializeJWS($id_token);
 
             // Verify header
-            $this->headerCheckerManager->check($jws, 0, ['alg']);
+            $this->verifyJWSHeader($jws);
 
             // Verify the signature
             $this->verifySignatures($jws);
@@ -503,7 +504,7 @@ class OpenIDConnectClient
             }
 
             // Get claims from JWT
-            $claims = json_decode($jws->getPayload());
+            $claims = $this->getJWSClaims($jws);
 
             if (!$this->verifyIdTokenClaims($claims)) {
                 throw new OpenIDConnectClientException('Unable to verify JWT claims');
@@ -607,16 +608,16 @@ class OpenIDConnectClient
             $logout_token = $this->handleJweResponse($logout_token);
         }
 
-        $jws = $this->jwsSerializerManager->unserialize($logout_token);
+        $jws = $this->unserializeJWS($logout_token);
 
         // Verify header
-        $this->headerCheckerManager->check($jws, 0, ['alg']);
+        $this->verifyJWSHeader($jws);
 
         // Verify the signature
         $this->verifySignatures($jws);
 
         // Get claims from JWT
-        $claims = json_decode($jws->getPayload());
+        $claims = $this->getJWSClaims($jws);
 
         // Verify Logout Token Claims
         if (!$this->verifyLogoutTokenClaims($claims)) {
@@ -1195,11 +1196,22 @@ class OpenIDConnectClient
     }
 
     /**
+     * Returns the claims from a JWS object
+     *
+     * @param JWS $jws
+     * @return object
+     */
+    public function getJWSClaims(JWS $jws): object
+    {
+        return json_decode($jws->getPayload());
+    }
+
+    /**
      * @param JWS $jws
      * @return bool
      * @throws OpenIDConnectClientException
      */
-    public function verifyJWS(JWS $jws): bool
+    public function verifyJWSSignature(JWS $jws): bool
     {
         $signature = $jws->getSignature(0);
         $alg = $signature->getProtectedHeaderParameter('alg');
@@ -1259,13 +1271,31 @@ class OpenIDConnectClient
     }
 
     /**
-     * @param string $jwt encoded JWT
+     * Verifies the JWS header of a JWS object
+     *
+     * @param JWS $jws
+     * @param int $index
+     * @param array $mandatoryHeaderParameters
      * @return void
      * @throws OpenIDConnectClientException
      */
-    public function verifySignatures(JWS $jws)
+    public function verifyJWSHeader(JWS $jws, int $index = 0, array $mandatoryHeaderParameters = ['alg']): void
     {
-        if (!$this->verifyJWS($jws)) {
+        try {
+            $this->headerCheckerManager->check($jws, $index, $mandatoryHeaderParameters);
+        } catch (Throwable) {
+            throw new OpenIDConnectClientException('Unable to verify JWS header');
+        }
+    }
+
+    /**
+     * @param JWS $jws
+     * @return void
+     * @throws OpenIDConnectClientException
+     */
+    public function verifySignatures(JWS $jws): void
+    {
+        if (!$this->verifyJWSSignature($jws)) {
             throw new OpenIDConnectClientException('Unable to verify signature');
         }
     }
@@ -1275,6 +1305,17 @@ class OpenIDConnectClient
         $enc = base64_encode($str);
         $enc = rtrim($enc, '=');
         return strtr($enc, '+/', '-_');
+    }
+
+    /**
+     * Unserializes a JWS string into a JWS object
+     *
+     * @param string $jws
+     * @return JWS
+     */
+    public function unserializeJWS(string $jws): JWS
+    {
+        return $this->jwsSerializerManager->unserialize($jws);
     }
 
     /**
@@ -1381,7 +1422,7 @@ class OpenIDConnectClient
                 }
             }
 
-            $jws = $this->jwsSerializerManager->unserialize($jwt);
+            $jws = $this->unserializeJWS($jwt);
 
             return $this->getClaimsFromSignedUserInfoResponse($jws);
 
@@ -1412,13 +1453,13 @@ class OpenIDConnectClient
     private function getClaimsFromSignedUserInfoResponse(JWS $jws)
     {
         // Verify header
-        $this->headerCheckerManager->check($jws, 0, ['alg']);
+        $this->verifyJWSHeader($jws);
 
         // Verify the signature
         $this->verifySignatures($jws);
 
         // Get claims from JWT
-        $claims = json_decode($jws->getPayload());
+        $claims = $this->getJWSClaims($jws);
 
         /*
          * The sub (subject) Claim MUST always be returned in the UserInfo Response.

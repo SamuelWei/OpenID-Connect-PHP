@@ -34,6 +34,11 @@ class OpenIDConnectClientTest extends TestCase
     protected function setUp(): void
     {
         $this->faker = Faker\Factory::create();
+
+        // Clear global variables
+        $_SESSION = [];
+        $_REQUEST = [];
+        $_SERVER = [];
     }
 
     /**
@@ -609,7 +614,7 @@ class OpenIDConnectClientTest extends TestCase
         $this->assertEquals(100, $client->getLeeway());
     }
 
-    public function testVerifyJWSWithRSASSA()
+    public function testVerifyJWTSignatureWithRSASSA()
     {
         // Create a new RSA key pairs for signing the ID token
         $pkRS256 = JWKFactory::createRSAKey(
@@ -691,22 +696,22 @@ class OpenIDConnectClientTest extends TestCase
             }));
 
         // RS256
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS256, 'RS256', ['kid' => $kidRS256])));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkRS256, 'RS256', ['kid' => $kidRS256])));
 
         // RS384
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS384, 'RS384', ['kid' => $kidRS384])));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkRS384, 'RS384', ['kid' => $kidRS384])));
 
         // RS512
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS512, 'RS512', ['kid' => $kidRS512])));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkRS512, 'RS512', ['kid' => $kidRS512])));
 
         // Without kid
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS256, 'RS256')));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkRS256, 'RS256')));
 
         // With wrong kid
         $this->expectException(OpenIDConnectClientException::class);
-        $this->assertFalse($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS256, 'RS256', ['kid' => 'wrong-kid'])));
+        $this->assertFalse($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkRS256, 'RS256', ['kid' => 'wrong-kid'])));
     }
-    public function testVerifyJWSWithRSASSA_PSS()
+    public function testVerifyJWTSignatureWithRSASSA_PSS()
     {
         // Create a new RSA key pairs for signing the ID token
         $pkPS256 = JWKFactory::createRSAKey(
@@ -788,23 +793,23 @@ class OpenIDConnectClientTest extends TestCase
             }));
 
         // PS256
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkPS256, 'PS256', ['kid' => $kidPS256])));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkPS256, 'PS256', ['kid' => $kidPS256])));
 
         // PS384
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkPS384, 'PS384', ['kid' => $kidPS384])));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkPS384, 'PS384', ['kid' => $kidPS384])));
 
         // PS512
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkPS512, 'PS512', ['kid' => $kidPS512])));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkPS512, 'PS512', ['kid' => $kidPS512])));
 
         // Without kid
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkPS256, 'PS256')));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkPS256, 'PS256')));
 
         // With wrong kid
         $this->expectException(OpenIDConnectClientException::class);
-        $this->assertFalse($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkPS256, 'PS256', ['kid' => 'wrong-kid'])));
+        $this->assertFalse($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkPS256, 'PS256', ['kid' => 'wrong-kid'])));
     }
 
-    public function testVerifyJWSWithECDSA()
+    public function testVerifyJWTSignatureWithECDSA()
     {
         // Create a new elliptic curve key pairs for signing the ID token
         $pkES256 = JWKFactory::createECKey('P-256');
@@ -868,23 +873,23 @@ class OpenIDConnectClientTest extends TestCase
             }));
 
         // ES256
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkES256, 'ES256', ['kid' => $kidES256])));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkES256, 'ES256', ['kid' => $kidES256])));
 
         // ES384
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkES384, 'ES384', ['kid' => $kidES384])));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkES384, 'ES384', ['kid' => $kidES384])));
 
         // ES512
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkES512, 'ES512', ['kid' => $kidES512])));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkES512, 'ES512', ['kid' => $kidES512])));
 
         // Without kid
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkES256, 'ES256')));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkES256, 'ES256')));
 
         // With wrong kid
         $this->expectException(OpenIDConnectClientException::class);
-        $this->assertFalse($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkES256, 'ES256', ['kid' => 'wrong-kid'])));
+        $this->assertFalse($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkES256, 'ES256', ['kid' => 'wrong-kid'])));
     }
 
-    public function testVerifyJWSWithEdDSA()
+    public function testVerifyJWTSignatureWithEdDSA()
     {
         // Create octet key pair for signing the ID token
         $pkEd25519 = JWKFactory::createOKPKey('Ed25519');
@@ -934,17 +939,17 @@ class OpenIDConnectClientTest extends TestCase
             }));
 
         // Ed25519
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkEd25519, 'EdDSA', ['kid' => $kidEd25519])));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkEd25519, 'EdDSA', ['kid' => $kidEd25519])));
 
         // Without kid
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkEd25519, 'EdDSA')));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkEd25519, 'EdDSA')));
 
         // With wrong kid
         $this->expectException(OpenIDConnectClientException::class);
-        $this->assertFalse($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkEd25519, 'EdDSA', ['kid' => 'wrong-kid'])));
+        $this->assertFalse($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkEd25519, 'EdDSA', ['kid' => 'wrong-kid'])));
     }
 
-    public function testVerifyJWSWithHMAC()
+    public function testVerifyJWTSignatureWithHMAC()
     {
 
         $clientSecret = bin2hex(random_bytes(32));
@@ -979,13 +984,13 @@ class OpenIDConnectClientTest extends TestCase
         );
 
         // HS256
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $keyHS256, 'HS256')));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $keyHS256, 'HS256')));
 
         // HS384
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $keyHS384, 'HS384')));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $keyHS384, 'HS384')));
 
         // HS512
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $keyHS512, 'HS512')));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $keyHS512, 'HS512')));
 
 
         // Create wrong key
@@ -997,9 +1002,9 @@ class OpenIDConnectClientTest extends TestCase
             ]
         );
 
-        $this->assertFalse($client->verifyJWS($this->createJWS(['sub' => 'test'], $wrongKeyHS256, 'HS256')));
+        $this->assertFalse($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $wrongKeyHS256, 'HS256')));
     }
-    public function testVerifyJWSWExceptionThrowsExceptionKeyNotFound()
+    public function testVerifyJWTSignatureExceptionThrowsExceptionKeyNotFound()
     {
         // Create a new RSA key pair for signing the ID token
         $pkRS256 = JWKFactory::createRSAKey(
@@ -1065,10 +1070,10 @@ class OpenIDConnectClientTest extends TestCase
 
         // RS256, without listing the used key in the JWKS
         $this->expectException(OpenIDConnectClientException::class);
-        $this->expectException($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS256Other, 'RS256', ['kid' => $kidRS256Other])));
+        $this->expectException($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkRS256Other, 'RS256', ['kid' => $kidRS256Other])));
     }
 
-    public function testVerifyJWSWUsesAdditionalJWKs()
+    public function testVerifyJWTSignatureUsesAdditionalJWKs()
     {
         // Create a new RSA key pair for signing the ID token
         $pkRS256 = JWKFactory::createRSAKey(
@@ -1139,7 +1144,7 @@ class OpenIDConnectClientTest extends TestCase
         ]);
 
         // RS256, with listing the used key in the JWKS
-        $this->assertTrue($client->verifyJWS($this->createJWS(['sub' => 'test'], $pkRS256Other, 'RS256', ['kid' => $kidRS256Other])));
+        $this->assertTrue($client->verifyJWSSignature($this->createJWS(['sub' => 'test'], $pkRS256Other, 'RS256', ['kid' => $kidRS256Other])));
 
     }
 
@@ -1933,6 +1938,138 @@ class OpenIDConnectClientTest extends TestCase
         // Call the authenticate method, should throw an exception
         $this->expectException(OpenIDConnectClientException::class);
         $client->authenticate();
+    }
+
+    public function testAuthenticateRedirectsToOP()
+    {
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL', 'redirect'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function (string$url, ?string $post_body = null, array $headers = []) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        $client->expects($this->once())
+            ->method('redirect')
+            ->with(self::callback(function ($url) {
+                $url = parse_url($url);
+                $this->assertEquals('https', $url['scheme']);
+                $this->assertEquals('example.org', $url['host']);
+                $this->assertEquals('/authorize', $url['path']);
+
+                $queryParams = [];
+                parse_str($url['query'], $queryParams);
+
+                $this->assertEquals('fake-client-id', $queryParams['client_id']);
+                $this->assertEquals('code', $queryParams['response_type']);
+                $this->assertEquals('https://myapp.com/callback', $queryParams['redirect_uri']);
+                $this->assertEquals('openid', $queryParams['scope']);
+
+                $this->assertEquals($_SESSION['openid_connect_state'], $queryParams['state']);
+                $this->assertEquals($_SESSION['openid_connect_nonce'], $queryParams['nonce']);
+
+                return true;
+            }));
+
+        // Set the redirect URI
+        $client->setRedirectURL('https://myapp.com/callback');
+
+        $this->assertFalse($client->authenticate());
+    }
+
+    public function testAuthenticateRedirectsToOPWithCustomParameters()
+    {
+        // Mock the OpenIDConnectClient, only mocking the fetchURL method
+        $client = $this->getMockBuilder(OpenIDConnectClient::class)
+            ->setConstructorArgs([
+                'https://example.org',
+                'fake-client-id',
+                'fake-client-secret',
+            ])
+            ->onlyMethods(['fetchURL', 'redirect'])
+            ->getMock();
+
+        $client->expects($this->any())
+            ->method('fetchURL')
+            ->with($this->anything())
+            ->will($this->returnCallback(function (string$url, ?string $post_body = null, array $headers = []) {
+                switch ($url) {
+                    case 'https://example.org/.well-known/openid-configuration':
+                        return new Response(200, 'application/json', json_encode([
+                            'issuer' => 'https://example.org/',
+                            'authorization_endpoint' => 'https://example.org/authorize',
+                            'token_endpoint' => 'https://example.org/token',
+                            'userinfo_endpoint' => 'https://example.org/userinfo',
+                            'jwks_uri' => 'https://example.org/jwks',
+                            'response_types_supported' => ['code', 'id_token'],
+                            'subject_types_supported' => ['public'],
+                            'id_token_signing_alg_values_supported' => ['RS256'],
+                        ]));
+                    default:
+                        throw new Exception("Unexpected request: $url");
+                }
+            }));
+
+        $client->expects($this->once())
+            ->method('redirect')
+            ->with(self::callback(function ($url) {
+                $url = parse_url($url);
+                $this->assertEquals('https', $url['scheme']);
+                $this->assertEquals('example.org', $url['host']);
+                $this->assertEquals('/authorize', $url['path']);
+
+                $queryParams = [];
+                parse_str($url['query'], $queryParams);
+
+                $this->assertEquals('fake-client-id', $queryParams['client_id']);
+                $this->assertEquals('id_token token', $queryParams['response_type']);
+                $this->assertEquals('https://myapp.com/callback', $queryParams['redirect_uri']);
+                $this->assertEquals('profile email openid', $queryParams['scope']);
+                $this->assertEquals('form_post', $queryParams['response_mode']);
+
+                $this->assertEquals($_SESSION['openid_connect_state'], $queryParams['state']);
+                $this->assertEquals($_SESSION['openid_connect_nonce'], $queryParams['nonce']);
+
+                return true;
+            }));
+
+        // Set the redirect URI
+        $client->setRedirectURL('https://myapp.com/callback');
+
+        // Add scopes
+        $client->addScope(['profile', 'email']);
+
+        // Set custom response types
+        $client->setResponseTypes(['id_token', 'token']);
+
+        // Set custom response mode
+        $client->addAuthParam(['response_mode' => 'form_post']);
+
+        $this->assertFalse($client->authenticate());
     }
 
     public function testRequestUserInfoUnsignedUnencrypted()

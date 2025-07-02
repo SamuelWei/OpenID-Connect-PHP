@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Min. PHP version to 8.1 #488
 - `fetchURL` response type to `Response` class #488
 - `Nonce` claim must be present, Partially reverts #280
-- `verifySignatures` method signature, accepting `JWS` object instead of string
+- `verifySignatures` method signature, accepting `JWS` object instead of string #488
 
 ### Fixed
 - Check existence of `sub` claim when verifying JWT #474
@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `getResponseContentType()`, replaced with new response method `getContentType()` #488
 - `verifyJWTClaims()`, replaced with individual checks #488
 - `validateIssuer()`, replaced with `IssuerChecker` #488
-- `verifyJWTSignature()`, replaced with `verifyJWS()` #488
+- `verifyJWTSignature()`, replaced with `verifyJWSSignature()` #488
 
 ## [1.0.1] - 2024-09-13
 
