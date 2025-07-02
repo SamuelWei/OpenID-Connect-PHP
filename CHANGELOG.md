@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for elliptic curves (ES256, ES384 & ES512) #488
 - Support for EdDSA (only Ed25519) #488
 - `getJtiFromBackChannel()` to retrieve the JTI after back-channel logout request #488
+- `getJWSClaims` to retrieve the claims from a JWS #488
+- `verifyJWSHeader` to verify the JWS header #488
 
 ### Changed
 - Stop adding ?schema=openid to userinfo endpoint URL. #449
